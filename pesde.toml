@@ -1,0 +1,31 @@
+name = "atk422/hydrogen"
+version = "0.1.0"
+description = "A mildy opinionated luau framework"
+authors = ["atk422"]
+license = "MIT"
+includes = [
+	"pesde.toml",
+	"src/**/*.luau",
+]
+
+[target]
+environment = "roblox"
+lib = "src/init.luau"
+build_files = ["src"]
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[scripts]
+roblox_sync_config_generator = ".pesde/scripts/roblox_sync_config_generator.luau"
+sourcemap_generator = ".pesde/scripts/sourcemap_generator.luau"
+test = "test/_run.luau"
+
+[dev_dependencies]
+scripts = { name = "pesde/scripts_rojo", version = "^0.2.0", target = "lune" }
+rojo = { name = "pesde/rojo", version = "^7.5.1", target = "lune" }
+frktest = { name = "itsfrank/frktest", version = "^0.0.4", target = "luau" }
+
+[engines]
+pesde = "^0.7.0"
+lune = "^0.10.2"

@@ -1,0 +1,6 @@
+{
+  "languageMode": "strict",
+  "aliases": {
+    "pkg": "luau_packages/"
+  }
+}
