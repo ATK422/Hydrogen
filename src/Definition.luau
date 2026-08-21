@@ -32,8 +32,8 @@ end
 
 export type Lifecycle = {
 	read id: string,
-	read init: (() -> ())?,
-	read start: (() -> ())?,
+	read init: ((any) -> ())?,
+	read start: ((any) -> ())?,
 }
 
 export type System<T> = WithoutLifecycle<T>

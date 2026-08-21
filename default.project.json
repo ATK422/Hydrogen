@@ -1,6 +1,11 @@
 {
   "name": "Hydrogen",
   "tree": {
-    "$path": "src"
+    "$path": "src",
+    "roblox_packages": {
+      "$path": {
+        "optional": "roblox_packages"
+      }
+    }
   }
 }

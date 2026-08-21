@@ -1,18 +1,19 @@
+local Network = require("./Network")
 local Definition = require("./Definition")
 
-type System<T> = Definition.Defined<T>
+type System = Definition.Lifecycle
 
 local App = {
-	_systems = {} :: { System<any> },
+	_systems = {} :: { System },
 	_started = false,
 }
 
-local function collectSystems(folder: Folder): { System<any> }
+local function collectSystems(folder: Folder): { System }
 	local systems = {}
 
 	for _, child in folder:GetDescendants() do
 		if child:IsA("ModuleScript") then
-			local system = require(child) :: System<any>
+			local system = require(child) :: System
 			if system.id then
 				table.insert(systems, system)
 			else
@@ -31,25 +32,37 @@ function App.new(): typeof(App)
 	return app
 end
 
-function App:addSystem(system: System<any>)
+function App:addSystem(system: System)
 	table.insert(self._systems, system)
 
 	if self._started then
-		system.init()
-		system.start()
+		if system.init then
+			system:init()
+		end
+		if system.start then
+			system:start()
+		end
 	end
 end
 
-function App:addSystems(systems: { System<any> })
+function App:addSystems(systems: { System })
 	for _, system in systems do
-		self:addsystem(system)
+		self:addSystem(system)
 	end
 end
 
 function App:addSystemsFolders(...: Folder)
 	for _, folder in { ... } do
 		local systems = collectSystems(folder)
-		self:addsystems(systems)
+		self:addSystems(systems)
+	end
+end
+
+function App:addNetwork(folder: Folder)
+	for _, child in folder:GetDescendants() do
+		if child:IsA("ModuleScript") then
+			local _ = require(child) :: any
+		end
 	end
 end
 
@@ -60,13 +73,16 @@ function App:start()
 
 	for _, system in systems do
 		if system.init then
-			system.init()
+			system:init()
 		end
 	end
 
+	-- Listeners register during init; the client then requests any queued events.
+	Network.init()
+
 	for _, system in systems do
 		if system.start then
-			system.start()
+			system:start()
 		end
 	end
 end

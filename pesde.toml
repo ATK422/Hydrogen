@@ -1,11 +1,12 @@
 name = "atk422/hydrogen"
-version = "0.1.0"
-description = "A mildy opinionated luau framework"
+version = "0.2.2"
+description = "A mildy opinionated luau framework/bootstrapper"
 authors = ["atk422"]
 license = "MIT"
 includes = [
 	"pesde.toml",
 	"src/**/*.luau",
+	"src/.luaurc",
 ]
 
 [target]
@@ -20,6 +21,9 @@ default = "https://github.com/pesde-pkg/index"
 roblox_sync_config_generator = ".pesde/scripts/roblox_sync_config_generator.luau"
 sourcemap_generator = ".pesde/scripts/sourcemap_generator.luau"
 test = "test/_run.luau"
+
+[dependencies]
+gt = { name = "corecii/greentea", version = "^0.4.11" }
 
 [dev_dependencies]
 scripts = { name = "pesde/scripts_rojo", version = "^0.2.0", target = "lune" }
