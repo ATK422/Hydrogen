@@ -20,6 +20,6 @@ jobs:
       - name: Install dependencies
         run: pesde install --locked
 
-      # Runs Lune directly; `pesde run test` aborts on the Linux runner (exit 134).
+      # pesde run hands off to a `lune` executable, so the setup step must install Lune.
       - name: Run tests
-        run: lune run test/_run.luau
+        run: pesde run test

@@ -291,7 +291,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 36 | Passed: 36` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). It calls `lune run test/_run.luau` directly, because `pesde run` aborts on the Linux runner.
+Expected output ends with `Tests Ran: 36 | Passed: 36` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
