@@ -1,10 +1,14 @@
 name = "atk422/hydrogen"
-version = "0.2.2"
-description = "A mildy opinionated luau framework/bootstrapper"
+version = "0.3.0"
+description = "A mildly opinionated luau framework/bootstrapper"
 authors = ["atk422"]
 license = "MIT"
+repository = "https://github.com/ATK422/Hydrogen"
 includes = [
 	"pesde.toml",
+	"README.md",
+	"LICENSE",
+	"CHANGELOG.md",
 	"src/**/*.luau",
 	"src/.luaurc",
 ]

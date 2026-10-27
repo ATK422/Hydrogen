@@ -4,7 +4,7 @@ A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you 
 
 - **Systems**: modules with `init` / `start` lifecycle hooks that run in dependency order.
 - **App**: collects your systems (and network definitions) and boots them.
-- **Network**: typed, schema-checked remote events and functions over a single `RemoteEvent` + `RemoteFunction`, with queuing so nothing fired during startup is lost.
+- **Network**: typed, schema-checked remote events and functions over a single `RemoteEvent` + `RemoteFunction`, with queuing so nothing fired during startup is lost, and middleware (including a built-in logger) for inspecting or transforming traffic.
 
 Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. License: MIT.
 
@@ -22,11 +22,7 @@ pesde add atk422/hydrogen
 pesde install
 ```
 
-Hydrogen validates network payloads with [GreenTea](https://github.com/corecii/greentea) (`corecii/greentea`). Add it to your own project too, so you can write the schemas:
-
-```bash
-pesde add corecii/greentea --alias gt
-```
+Hydrogen validates network payloads with [GreenTea](https://github.com/corecii/greentea). Write your schemas with `Hydrogen.gt`, the same GreenTea copy Hydrogen checks with, so you don't need to install it separately.
 
 ### Public API
 
@@ -39,7 +35,12 @@ Hydrogen.clientEvent    -- client -> server event
 Hydrogen.serverEvent    -- server -> client event
 Hydrogen.clientFunction -- client -> server request/response
 Hydrogen.serverFunction -- server -> client request/response
+Hydrogen.useMiddleware  -- add middleware to every network object
+Hydrogen.logger         -- build a logging middleware for debugging
+Hydrogen.gt             -- GreenTea, for writing schemas
 ```
+
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware` and `Hydrogen.LoggerOptions`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -104,7 +105,7 @@ Declare network objects in shared modules that **both** the server and client re
 ```luau
 -- ReplicatedStorage/Network/Chat.luau
 local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
-local gt = require(ReplicatedStorage.roblox_packages.gt)
+local gt = Hydrogen.gt
 
 return {
 	-- client -> server
@@ -130,7 +131,12 @@ return {
 
 Every `:On` returns a disconnect function. Events can have many listeners; a function has one handler (calling `:On` again replaces it).
 
-Payloads are checked against the schema with `assert` on fire, and function arguments/returns are checked on both ends, so bad data errors instead of travelling silently.
+Payloads are checked against the schema on both ends:
+
+- **Firing** with values that don't match the schema errors immediately.
+- **Receiving** an event whose payload doesn't match is dropped with a `[HYDROGEN] Dropped invalid <name> from <player>` warning; listeners never see it. This is what protects the server from exploiters sending arbitrary data.
+- **Functions** check arguments and return values on both ends. A bad request errors back to the caller.
+- Events arriving with an unknown network id are dropped with a warning.
 
 Usage inside a system:
 
@@ -150,6 +156,67 @@ function ChatClient:start()
 	Chat.SendMessage:Fire("hello")
 end
 ```
+
+### Middleware
+
+Middleware sees, and can replace, every payload going over the wire. It has this shape:
+
+```luau
+function(context: Hydrogen.MiddlewareContext, ...): ...
+	-- return the values to pass on (return ... to leave them unchanged)
+	return ...
+end
+```
+
+`context` tells you what's happening:
+
+| Field | Value |
+| --- | --- |
+| `name` | the network object's name |
+| `kind` | `"ClientEvent"`, `"ServerEvent"`, `"ClientFunction"` or `"ServerFunction"` |
+| `direction` | `"outgoing"` (about to be sent) or `"incoming"` (just received) |
+| `payload` | `"event"`, `"request"` or `"response"` |
+| `player` | on the server, the single player involved (sender, or function target) |
+| `players` | on the server, every target of an outgoing `serverEvent` |
+
+Attach it per object or globally. Each call returns a function that removes the middleware again.
+
+```luau
+Chat.SendMessage:Use(middleware)      -- events: runs on send and on receive
+Chat.GetHistory:UseRequest(middleware)  -- functions: the arguments
+Chat.GetHistory:UseResponse(middleware) -- functions: the return values
+Hydrogen.useMiddleware(middleware)    -- every network object
+```
+
+The same middleware runs on both sides, so check `context.direction` when it should only act one way. Middleware is layered like an onion: outgoing data runs through object middleware in the order added, then global middleware; incoming data runs through global middleware, then object middleware, each in reverse order. That way an encode/decode pair undoes itself correctly.
+
+Schemas describe your app-level values: they're checked **before** outgoing middleware and **after** incoming middleware. A middleware that changes the wire format must convert back on the receiving side.
+
+Because incoming middleware runs before validation, it receives whatever the other side sent, regardless of the Luau types. On the server that means data from possibly malicious clients: check types before using values in incoming middleware.
+
+#### Logging traffic
+
+`Hydrogen.logger(options?)` builds a middleware that prints every message and passes it through unchanged. Add it on both server and client while debugging:
+
+```luau
+Hydrogen.useMiddleware(Hydrogen.logger())
+```
+
+Output looks like:
+
+```
+[HYDROGEN] -> SendMessage: "hello"
+[HYDROGEN] <- SendMessage from Player1: "hello"
+[HYDROGEN] -> MessagePosted to 3 players: "Player1", "hello"
+[HYDROGEN] <- GetHistory request from Player1: 10
+```
+
+Options:
+
+- `filter: (context) -> boolean`: return `false` to skip a message, e.g. `function(context) return context.name ~= "MouseMoved" end`.
+- `output: (message: string) -> ()`: where lines go. Defaults to `print`.
+
+Because it's global middleware, the logger shows what is actually on the wire, after your own outgoing middleware and before your own incoming middleware.
 
 ### Booting the app
 
@@ -196,9 +263,9 @@ What `app:start()` does, in order:
 - **The server and the client must register the same set of names.** Wire ids are assigned by sorting names alphabetically on each side, so a name that exists on one side only shifts every id after it. Put definitions in shared modules and `addNetwork` the same folder on both sides.
 - Names must be unique. Duplicates warn and are ignored.
 - Events fired before the network starts (e.g. in `init`) are queued and sent once it does. Server events aimed at a player whose client hasn't finished starting are held and delivered on that client's handshake.
-- **Functions are not queued.** Only call `clientFunction:Fire` / `serverFunction:Fire` from `start` or later.
+- **Functions are not queued.** Only call `clientFunction:Fire` / `serverFunction:Fire` from `start` or later; calling one earlier errors with `called before the network started`.
 - `serverFunction:Fire` invokes a single client and yields until it answers.
-- Note: on the server, `clientEvent` listeners receive `player` as their first argument even though the Luau type of `:On` doesn't show it yet.
+- Middleware added after a message is queued does not run on it; add middleware before firing anything.
 
 ---
 
@@ -224,24 +291,25 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 24 | Passed: 24` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure.
+Expected output ends with `Tests Ran: 36 | Passed: 36` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the same command on every push to `main` and every pull request (`.github/workflows/ci.yml`).
 
 ### Layout
 
 ```
 src/
-  init.luau            public API (App, define, clientEvent, serverEvent, clientFunction, serverFunction)
+  init.luau            public API and exported types
   App.luau             App: collects systems, runs init -> Network.init -> start
   Definition.luau      define/use, system ids, dependency graph wiring, lifecycle-stripping type function
   Graph.luau           generic dependency graph with topological sort and cycle detection
   Network/
     init.luau          exports constructors and Network.init
     Runtime.luau       remotes, name->id mapping, queues, ready handshake, dispatch
+    Middleware.luau    middleware context/types, onion ordering, global middleware, logger
     ClientEvent.luau   ServerEvent.luau  ClientFunction.luau  ServerFunction.luau
 test/
   _run.luau            Lune entry point: mocks Roblox globals, patches require, runs suites
   App.luau  Definition.luau  Graph.luau  Network.luau
-default.project.json   Rojo project (src + optional roblox_packages)
+default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
 ```
 
@@ -258,18 +326,27 @@ To add a test file: create `test/Thing.luau` that returns a function registering
 
 ### Conventions
 
-- Every file is `--!strict` (also set in `.luaurc` / `src/.luaurc`). Keep code type-checking clean.
-- Requires: `@self/...` from `init.luau` files, `./...` or `../...` elsewhere. Network modules load GreenTea from `../../roblox_packages/gt`.
+- Strict mode is on for every file through `.luaurc` / `src/.luaurc`. Keep code type-checking clean.
+- Requires: `@self/...` from `init.luau` files, `./...` or `../...` elsewhere. GreenTea is loaded by relative path (`./roblox_packages/gt` from `src/init.luau`, `../../roblox_packages/gt` from `src/Network/*`).
+- Those paths rely on `src` and `roblox_packages` being siblings. That is the layout pesde generates for consumers, and `default.project.json` mirrors it for development. Don't move `roblox_packages` inside `src`. After changing `default.project.json`, regenerate the sourcemap with `rojo sourcemap default.project.json --output sourcemap.json`.
 - Runtime warnings and errors are prefixed with `[HYDROGEN]`.
 - Match the indentation of the file you edit (most use tabs; some `Network/*` files use 4 spaces).
 - Public API changes go through `src/init.luau`. Update this README when the API or a network rule changes.
 
 ### Releasing
 
-Bump `version` in `pesde.toml`, run the tests, then publish:
+1. Bump `version` in `pesde.toml` and run `pesde install` so `pesde.lock` picks it up.
+2. Add the release to `CHANGELOG.md`.
+3. Run the tests, then check what will be uploaded:
+
+```bash
+pesde publish --dry-run
+```
+
+4. Publish:
 
 ```bash
 pesde publish
 ```
 
-Only files listed under `includes` in `pesde.toml` (`src/**/*.luau`, `src/.luaurc`, `pesde.toml`) are published.
+Only files listed under `includes` in `pesde.toml` are published: the source, `pesde.toml`, `README.md`, `LICENSE` and `CHANGELOG.md`. `default.project.json` is deliberately left out so pesde generates the consumer layout.

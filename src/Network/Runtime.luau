@@ -3,22 +3,21 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local gt = require("../../roblox_packages/gt")
+local Middleware = require("./Middleware")
 
 -- Reserved so named events keep 1-based ids from assignIds.
 local PROTOCOL_READY = 0
 
 export type InnerNetworkInfo<T...> = {
     _name: string,
-    _outgoingMiddleware: { (T...) -> T... },
-    _incomingMiddleware: { (T...) -> T... },
-    _listeners: { (T...) -> () },
+    _middleware: { Middleware.Middleware<T...> },
     _schema: gt.Type,
 }
 
 export type InnerNetworkFunction<A..., R...> = {
     _name: string,
-    _outgoingMiddleware: { (A...) -> A... },
-    _incomingMiddleware: { (A...) -> A... },
+    _requestMiddleware: { Middleware.Middleware<A...> },
+    _responseMiddleware: { Middleware.Middleware<R...> },
     _argsSchema: gt.Type,
     _returnsSchema: gt.Type,
 }
@@ -41,9 +40,10 @@ local Runtime = {
     RemoteEvent = nil :: RemoteEvent?,
     RemoteFunction = nil :: RemoteFunction?,
     UnprocessedNames = {} :: {[number]: string},
+    RegisteredNames = {} :: {[string]: boolean},
     NameToIdMap = {} :: {[string]: number},
     IdToNameMap = {} :: {[number]: string},
-    EventCallbacks = {} :: {[string]: { (...any) -> () }},
+    EventHandlers = {} :: {[string]: (...any) -> ()},
     FunctionCallbacks = {} :: {[string]: (...any) -> ...any},
     OutgoingQueue = {} :: { OutgoingEvent },
     PlayerQueues = {} :: { [Player]: { QueuedClientEvent } },
@@ -131,8 +131,8 @@ function Runtime:assignIds()
     end
 end
 
-function Runtime:registerEventListeners(name: string, listeners: { (...any) -> () })
-    Runtime.EventCallbacks[name] = listeners
+function Runtime:registerEventHandler(name: string, handler: (...any) -> ())
+    Runtime.EventHandlers[name] = handler
 end
 
 function Runtime:registerNetworkObject(event: string)
@@ -141,17 +141,32 @@ function Runtime:registerNetworkObject(event: string)
         return
     end
 
-    if Runtime.NameToIdMap[event] then
+    if Runtime.RegisteredNames[event] then
         warn(`[HYDROGEN] Network object {event} already registered, ignoring registration`)
         return
     end
 
+    Runtime.RegisteredNames[event] = true
     table.insert(Runtime.UnprocessedNames, event)
-    Runtime.NameToIdMap[event] = 0
 end
 
-function Runtime:getNetworkId(event: string)
+-- nil until assignIds has run for this name.
+function Runtime:getNetworkId(event: string): number?
     return Runtime.NameToIdMap[event]
+end
+
+-- Functions can't be queued, so they need the network running and a real id.
+function Runtime:getFunctionId(name: string): number
+    if not Runtime.Initialized then
+        error(`[HYDROGEN] Network function {name} called before the network started; call functions from start or later`)
+    end
+
+    local id = Runtime:getNetworkId(name)
+    if not id then
+        error(`[HYDROGEN] Network function {name} not found`)
+    end
+
+    return id
 end
 
 function Runtime:getNameFromId(id: number): string
@@ -282,10 +297,7 @@ end
 
 --For safety, you can only fire to one client at a time
 function Runtime:fireClientFunction(name: string, player: Player, ...: any): any
-    local id = Runtime:getNetworkId(name)
-    if not id then
-        error(`[HYDROGEN] Network function {name} not found`)
-    end
+    local id = Runtime:getFunctionId(name)
 
     local networkObject = getNetworkObjectOfType("RemoteFunction")
     if not networkObject then
@@ -297,10 +309,7 @@ function Runtime:fireClientFunction(name: string, player: Player, ...: any): any
 end
 
 function Runtime:fireServerFunction(name: string, ...: any): any
-    local id = Runtime:getNetworkId(name)
-    if not id then
-        error(`[HYDROGEN] Network function {name} not found`)
-    end
+    local id = Runtime:getFunctionId(name)
 
     local networkObject = getNetworkObjectOfType("RemoteFunction")
     if not networkObject then
@@ -311,17 +320,21 @@ function Runtime:fireServerFunction(name: string, ...: any): any
     return remote:InvokeServer(id, ...)
 end
 
+-- On the server the id comes straight from a client, so unknown ids are dropped rather than erroring.
 function Runtime:handleEvent(id: number, ...: any)
-    local name = Runtime:getNameFromId(id)
-    local callbacks = Runtime.EventCallbacks[name]
-    if not callbacks then
+    local name = Runtime.IdToNameMap[id]
+    if not name then
+        warn(`[HYDROGEN] Dropped event with unknown network id {id}`)
+        return
+    end
+
+    local handler = Runtime.EventHandlers[name]
+    if not handler then
         warn(`[HYDROGEN] No callbacks registered for event {name}`)
         return
     end
 
-    for _, callback in callbacks do
-        callback(...)
-    end
+    handler(...)
 end
 
 function Runtime:handleFunction(id: number, ...: any): any

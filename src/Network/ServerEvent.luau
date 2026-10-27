@@ -1,11 +1,14 @@
 local gt = require("../../roblox_packages/gt")
+local Middleware = require("./Middleware")
 local Runtime = require("./Runtime")
 
 export type ServerEvent<T...> = Runtime.InnerNetworkInfo<T...> & {
+    _listeners: { (T...) -> () },
     On: (self: ServerEvent<T...>, callback: (T...) -> ()) -> () -> (),
     Fire: (self: ServerEvent<T...>, player: Player | { Player }, T...) -> (),
     FireAll: (self: ServerEvent<T...>, T...) -> (),
     FireExcept: (self: ServerEvent<T...>, player: Player | { Player }, T...) -> (),
+    Use: (self: ServerEvent<T...>, middleware: Middleware.Middleware<T...>) -> () -> (),
 }
 
 local function toPlayers(player: Player | { Player }): { Player }
@@ -22,30 +25,39 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
     local event = {} :: ServerEvent<T...>
 
     event._name = name
-    event._outgoingMiddleware = {}
-    event._incomingMiddleware = {}
+    event._middleware = {}
     event._listeners = {}
     event._schema = gt.build(...)
 
-    function event:On(callback: (T...) -> ()): () -> ()
-        table.insert(self._listeners, callback)
+    local function send(players: { Player }, ...: any)
+        Runtime:fireClientEvent(name, players, Middleware.run(event._middleware, "ServerEvent", name, "outgoing", "event", nil, players, ...))
+    end
 
-        return function()
-            local index = table.find(self._listeners, callback)
-            if index then
-                table.remove(self._listeners, index)
-            end
+    local function deliver(...: any)
+        local ok, cause = event._schema:matches(...)
+        if not ok then
+            warn(`[HYDROGEN] Dropped invalid {name} from server: {cause:formatErr()}`)
+            return
         end
+
+        -- Cloned so a listener that disconnects itself doesn't skip the next one.
+        for _, listener in table.clone(event._listeners) do
+            listener(...)
+        end
+    end
+
+    function event:On(callback: (T...) -> ()): () -> ()
+        return Middleware.add(self._listeners, callback)
     end
 
     function event:Fire(player: Player | { Player }, ...: T...)
         self._schema:assert(...)
-        Runtime:fireClientEvent(self._name, toPlayers(player), ...)
+        send(toPlayers(player), ...)
     end
 
     function event:FireAll(...: T...)
         self._schema:assert(...)
-        Runtime:fireClientEvent(self._name, game:GetService("Players"):GetPlayers(), ...)
+        send(game:GetService("Players"):GetPlayers(), ...)
     end
 
     function event:FireExcept(player: Player | { Player }, ...: T...)
@@ -63,11 +75,17 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
             end
         end
 
-        Runtime:fireClientEvent(self._name, players, ...)
+        send(players, ...)
+    end
+
+    function event:Use(middleware: Middleware.Middleware<T...>): () -> ()
+        return Middleware.add(self._middleware, middleware)
     end
 
     Runtime:registerNetworkObject(name)
-    Runtime:registerEventListeners(name, event._listeners)
+    Runtime:registerEventHandler(name, function(...)
+        deliver(Middleware.run(event._middleware, "ServerEvent", name, "incoming", "event", nil, nil, ...))
+    end)
 
     return event
 end
