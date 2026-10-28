@@ -44,6 +44,9 @@ return function()
 		Runtime.ReadyPlayers = {}
 		Runtime.DepartedPlayers = setmetatable({}, { __mode = "k" }) :: any
 		Runtime.Loopback = nil
+		Runtime.Batching = false
+		Runtime.Batches = {}
+		Runtime.ServerBatch = nil
 		Middleware.global = {}
 	end)
 
@@ -362,6 +365,31 @@ return function()
 			check.equal(inbox[alice][2], nil)
 			check.equal(inbox[bob][2], "round over")
 			check.equal(inbox[carol][2], "round over")
+			return nil
+		end)
+
+		test.case("batching is skipped under loopback and reset on close", function()
+			local Tick = Hydrogen.serverEvent("loop-Tick", gt.number())
+			local received = {}
+			Tick:On(function(value)
+				table.insert(received, value)
+			end)
+
+			local loopback = openLoopback()
+			local player = loopback:join()
+			local app = Hydrogen.App.new({ batching = true })
+			table.insert(apps, app)
+			app:start()
+
+			-- Sent straight away, not held for a Heartbeat the headless runtime doesn't have.
+			check.equal(Runtime.Batching, false)
+			Tick:Fire(player, 1)
+			check.equal(received[1], 1)
+
+			Runtime.Batching = true
+			loopback:close()
+			check.equal(Runtime.Batching, false)
+			check.equal(Runtime.ServerBatch, nil)
 			return nil
 		end)
 

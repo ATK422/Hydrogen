@@ -7,6 +7,13 @@ local Middleware = require("./Middleware")
 
 -- Reserved so named events keep 1-based ids from assignIds.
 local PROTOCOL_READY = 0
+-- On the event remotes id 0 marks a batch: (0, id, argCount, args..., id, argCount, args...).
+local PROTOCOL_BATCH = 0
+
+-- Values in one batched remote call. Unpacking many more than this overflows the Luau stack.
+local MAX_BATCH_VALUES = 4000
+-- Estimated bytes for the batch id and the remote's own framing.
+local BATCH_OVERHEAD = 16
 
 export type InnerNetworkInfo<T...> = {
     _name: string,
@@ -42,6 +49,23 @@ export type LoopbackHost = {
     handshake: (self: any) -> (),
 }
 
+export type BatchedEvent = {
+    id: number,
+    args: PackedArgs,
+    -- Estimated serialized bytes, filled in when an unreliable batch is packed.
+    size: number?,
+}
+
+export type Batch = {
+    reliable: { BatchedEvent },
+    unreliable: { BatchedEvent },
+}
+
+export type InitOptions = {
+    -- Collect events per target and send them once per frame.
+    batching: boolean?,
+}
+
 local Runtime = {
     Initialized = false,
     RemoteEvent = nil :: RemoteEvent?,
@@ -63,6 +87,13 @@ local Runtime = {
     DepartedPlayers = setmetatable({}, { __mode = "k" }) :: { [Player]: boolean },
     -- Set while a loopback is open: this VM is the server and every fake client at once.
     Loopback = nil :: LoopbackHost?,
+    -- Set by init from App.new({ batching = true }).
+    Batching = false,
+    -- Events waiting for this frame's flush: per player on the server, one batch to the server on the client.
+    Batches = {} :: { [Player]: Batch },
+    ServerBatch = nil :: Batch?,
+    -- Roblox drops UnreliableRemoteEvent messages over about 900 bytes.
+    UnreliableLimit = 900,
 }
 
 local function isClient(): boolean
@@ -75,6 +106,68 @@ end
 
 local function unpackArgs(args: PackedArgs): ...any
     return table.unpack(args, 1, args.n or #args)
+end
+
+local function eventRemote(unreliable: boolean): any
+    if unreliable then
+        local remote = Runtime.UnreliableRemoteEvent
+        if not remote then
+            error(`[HYDROGEN] Network object UnreliableRemoteEvent not found`)
+        end
+        return remote
+    end
+
+    local remote = Runtime.RemoteEvent
+    if not remote then
+        error(`[HYDROGEN] Network object RemoteEvent not found`)
+    end
+    return remote
+end
+
+-- A rough upper bound of what Roblox serializes for a value, for the unreliable size limit.
+local function estimateSize(value: any, depth: number): number
+    local kind = typeof(value)
+    if kind == "nil" or kind == "boolean" then
+        return 2
+    elseif kind == "number" then
+        return 9
+    elseif kind == "string" then
+        return #value + 4
+    elseif kind == "buffer" then
+        return buffer.len(value) + 4
+    elseif kind == "Vector3" then
+        return 13
+    elseif kind == "CFrame" then
+        return 49
+    elseif kind == "table" then
+        -- Remotes reject cyclic tables, so give up on very deep ones rather than recursing forever.
+        if depth > 16 then
+            return math.huge
+        end
+        local size = 4
+        for key, entry in value do
+            size += estimateSize(key, depth + 1) + estimateSize(entry, depth + 1)
+        end
+        return size
+    end
+
+    return 16
+end
+
+local function messageSize(message: BatchedEvent): number
+    local size = message.size
+    if size then
+        return size
+    end
+
+    -- The id and the argument count.
+    size = 18
+    local args = message.args
+    for index = 1, args.n do
+        size += estimateSize(args[index], 0)
+    end
+    message.size = size
+    return size
 end
 
 -- when writing the docs, ensure you say that this can yield on the client
@@ -102,13 +195,19 @@ function getNetworkObjectOfType(networkType: "RemoteEvent" | "UnreliableRemoteEv
 end
 
 -- when writing the docs, ensure you say that this can yield on the client (remotes + ready handshake)
-function Runtime:init()
+function Runtime:init(options: InitOptions?)
     if Runtime.Initialized then
         -- Under loopback a server app and a client app share this runtime.
         if not Runtime.Loopback then
             warn(`[HYDROGEN] Network already initialized`)
         end
         return
+    end
+
+    -- Loopback runs every fake client in this VM, so one client-side batch would mix their
+    -- events and send them all as whichever client flushed. Loopback tests logic, not the wire.
+    if options and options.batching ~= nil and not Runtime.Loopback then
+        Runtime.Batching = options.batching
     end
 
     Runtime.RemoteEvent = getNetworkObjectOfType("RemoteEvent") :: RemoteEvent
@@ -118,11 +217,19 @@ function Runtime:init()
 
     if isClient() then
         (Runtime.RemoteEvent :: RemoteEvent).OnClientEvent:Connect(function(id, ...)
-            Runtime:handleEvent(id, ...)
+            if id == PROTOCOL_BATCH then
+                Runtime:handleBatch(nil, ...)
+            else
+                Runtime:handleEvent(id, ...)
+            end
         end);
 
         (Runtime.UnreliableRemoteEvent :: UnreliableRemoteEvent).OnClientEvent:Connect(function(id, ...)
-            Runtime:handleEvent(id, ...)
+            if id == PROTOCOL_BATCH then
+                Runtime:handleBatch(nil, ...)
+            else
+                Runtime:handleEvent(id, ...)
+            end
         end);
 
         (Runtime.RemoteFunction :: RemoteFunction).OnClientInvoke = function(id, ...)
@@ -132,11 +239,19 @@ function Runtime:init()
 
     if isServer() then
         (Runtime.RemoteEvent :: RemoteEvent).OnServerEvent:Connect(function(player, id, ...)
-            Runtime:handleEvent(id :: number, player, ...)
+            if id == PROTOCOL_BATCH then
+                Runtime:handleBatch(player, ...)
+            else
+                Runtime:handleEvent(id :: number, player, ...)
+            end
         end);
 
         (Runtime.UnreliableRemoteEvent :: UnreliableRemoteEvent).OnServerEvent:Connect(function(player, id, ...)
-            Runtime:handleEvent(id :: number, player, ...)
+            if id == PROTOCOL_BATCH then
+                Runtime:handleBatch(player, ...)
+            else
+                Runtime:handleEvent(id :: number, player, ...)
+            end
         end);
 
         (Runtime.RemoteFunction :: RemoteFunction).OnServerInvoke = function(player, id, ...)
@@ -153,6 +268,13 @@ function Runtime:init()
                 Runtime:removePlayer(player)
             end)
         end
+    end
+
+    -- Heartbeat is the last step of a frame, so events fired anywhere in it go out together.
+    if Runtime.Batching then
+        RunService.Heartbeat:Connect(function()
+            Runtime:flushBatches()
+        end)
     end
 
     Runtime.Initialized = true
@@ -282,6 +404,7 @@ function Runtime:removePlayer(player: Player)
     Runtime.DepartedPlayers[player] = true
     Runtime.ReadyPlayers[player] = nil
     Runtime.PlayerQueues[player] = nil
+    Runtime.Batches[player] = nil
 end
 
 function Runtime:queueForPlayer(player: Player, id: number, args: PackedArgs)
@@ -379,24 +502,23 @@ function Runtime:fireClientEvent(name: string, players: { Player }, ...: any)
         error(`[HYDROGEN] Network event {name} not found`)
     end
 
+    -- One record shared by every player's batch, so its size is estimated once.
+    local message: BatchedEvent? = nil
+
     for _, player in players do
         if Runtime:isDeparted(player) then
             continue
         elseif Runtime.ReadyPlayers[player] then
-            if unreliable then
-                local remote = Runtime.UnreliableRemoteEvent
-                if not remote then
-                    error(`[HYDROGEN] Network object UnreliableRemoteEvent not found`)
+            if Runtime.Batching then
+                message = message or { id = id, args = args }
+                local batch = Runtime.Batches[player]
+                if not batch then
+                    batch = { reliable = {}, unreliable = {} }
+                    Runtime.Batches[player] = batch
                 end
-
-                remote:FireClient(player, id, unpackArgs(args))
+                table.insert(if unreliable then batch.unreliable else batch.reliable, message :: BatchedEvent)
             else
-                local remote = Runtime.RemoteEvent
-                if not remote then
-                    error(`[HYDROGEN] Network object RemoteEvent not found`)
-                end
-
-                remote:FireClient(player, id, unpackArgs(args))
+                eventRemote(unreliable):FireClient(player, id, unpackArgs(args))
             end
         elseif not unreliable then
             Runtime:queueForPlayer(player, id, args)
@@ -424,22 +546,114 @@ function Runtime:fireServerEvent(name: string, ...: any)
         error(`[HYDROGEN] Network event {name} not found`)
     end
 
-    if unreliable then
-        local remote = Runtime.UnreliableRemoteEvent
-        if not remote then
-            error(`[HYDROGEN] Network object UnreliableRemoteEvent not found`)
+    if Runtime.Batching then
+        local batch = Runtime.ServerBatch
+        if not batch then
+            batch = { reliable = {}, unreliable = {} }
+            Runtime.ServerBatch = batch
         end
-
-        remote:FireServer(id, unpackArgs(args))
+        table.insert(if unreliable then batch.unreliable else batch.reliable, { id = id, args = args })
         return
     end
 
-    local remote = Runtime.RemoteEvent
-    if not remote then
-        error(`[HYDROGEN] Network object RemoteEvent not found`)
+    eventRemote(unreliable):FireServer(id, unpackArgs(args))
+end
+
+-- Splits messages into remote calls: (PROTOCOL_BATCH, id, argCount, args..., ...) for several,
+-- or (id, args...) for one on its own. With byteLimit, each call's estimated size stays under it,
+-- and a message too big for any batch goes alone, as it would unbatched.
+function Runtime:packBatch(messages: { BatchedEvent }, byteLimit: number?): { PackedArgs }
+    local sends: { PackedArgs } = {}
+    local current: PackedArgs = { PROTOCOL_BATCH, n = 1 }
+    local count = 0
+    local size = BATCH_OVERHEAD
+    local last: BatchedEvent? = nil
+
+    local function alone(message: BatchedEvent)
+        table.insert(sends, table.pack(message.id, unpackArgs(message.args)) :: any)
     end
 
-    remote:FireServer(id, unpackArgs(args))
+    local function finish()
+        if count == 1 then
+            -- One message is smaller sent as itself.
+            alone(last :: BatchedEvent)
+        elseif count > 1 then
+            table.insert(sends, current)
+        end
+        current = { PROTOCOL_BATCH, n = 1 }
+        count = 0
+        size = BATCH_OVERHEAD
+    end
+
+    for _, message in messages do
+        local args = message.args
+        local values = 2 + args.n
+        local bytes = if byteLimit then messageSize(message) else 0
+
+        if values + 1 > MAX_BATCH_VALUES or (byteLimit and bytes + BATCH_OVERHEAD > byteLimit) then
+            finish()
+            alone(message)
+            continue
+        end
+
+        if current.n + values > MAX_BATCH_VALUES or (byteLimit and size + bytes > byteLimit) then
+            finish()
+        end
+
+        local n = current.n
+        current[n + 1] = message.id
+        current[n + 2] = args.n
+        table.move(args, 1, args.n, n + 3, current)
+        current.n = n + values
+        count += 1
+        size += bytes
+        last = message
+    end
+
+    finish()
+    return sends
+end
+
+-- Sends a player's batched events now. A player who left since gets nothing, as when unbatched.
+function Runtime:flushPlayer(player: Player)
+    local batch = Runtime.Batches[player]
+    if not batch then
+        return
+    end
+    Runtime.Batches[player] = nil
+
+    if Runtime:isDeparted(player) then
+        return
+    end
+
+    for _, send in Runtime:packBatch(batch.reliable) do
+        eventRemote(false):FireClient(player, unpackArgs(send))
+    end
+    for _, send in Runtime:packBatch(batch.unreliable, Runtime.UnreliableLimit) do
+        eventRemote(true):FireClient(player, unpackArgs(send))
+    end
+end
+
+function Runtime:flushServerBatch()
+    local batch = Runtime.ServerBatch
+    if not batch then
+        return
+    end
+    Runtime.ServerBatch = nil
+
+    for _, send in Runtime:packBatch(batch.reliable) do
+        eventRemote(false):FireServer(unpackArgs(send))
+    end
+    for _, send in Runtime:packBatch(batch.unreliable, Runtime.UnreliableLimit) do
+        eventRemote(true):FireServer(unpackArgs(send))
+    end
+end
+
+function Runtime:flushBatches()
+    for player in Runtime.Batches do
+        Runtime:flushPlayer(player)
+    end
+    Runtime:flushServerBatch()
 end
 
 --For safety, you can only fire to one client at a time.
@@ -447,6 +661,11 @@ end
 -- so a finite timeout errors in the caller instead of leaving its thread hanging.
 function Runtime:fireClientFunction(name: string, player: Player, timeout: number, ...: any): ...any
     local id = Runtime:getFunctionId(name)
+
+    -- Events fired before the call reach the client before it.
+    if Runtime.Batching then
+        Runtime:flushPlayer(player)
+    end
 
     local networkObject = getNetworkObjectOfType("RemoteFunction")
     if not networkObject then
@@ -497,6 +716,10 @@ end
 function Runtime:fireServerFunction(name: string, ...: any): any
     local id = Runtime:getFunctionId(name)
 
+    if Runtime.Batching then
+        Runtime:flushServerBatch()
+    end
+
     local networkObject = getNetworkObjectOfType("RemoteFunction")
     if not networkObject then
         error(`[HYDROGEN] Network object RemoteFunction not found`)
@@ -521,6 +744,35 @@ function Runtime:handleEvent(id: number, ...: any)
     end
 
     handler(...)
+end
+
+local function handleEvent(id: number, ...: any)
+    Runtime:handleEvent(id, ...)
+end
+
+-- Unpacks a batch and dispatches its events in order. On the server, sender is the player it came
+-- from; the batch is client data then, so anything malformed drops the rest of it.
+-- Each event runs in its own thread, as separate remote calls would, so a listener that yields
+-- or errors doesn't hold up the rest.
+function Runtime:handleBatch(sender: Player?, ...: any)
+    local values = table.pack(...)
+    local index = 1
+
+    while index <= values.n do
+        local id, count = values[index], values[index + 1]
+        if type(count) ~= "number" or count % 1 ~= 0 or count < 0 or index + 1 + count > values.n then
+            warn(`[HYDROGEN] Dropped malformed event batch`)
+            return
+        end
+
+        local first, last = index + 2, index + 1 + count
+        if sender then
+            task.spawn(handleEvent, id, sender, table.unpack(values, first, last))
+        else
+            task.spawn(handleEvent, id, table.unpack(values, first, last))
+        end
+        index = last + 1
+    end
 end
 
 function Runtime:handleFunction(id: number, ...: any): any

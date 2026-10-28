@@ -4,6 +4,8 @@ local roblox = require("@lune/roblox")
 
 local dataModel = roblox.Instance.new("DataModel")
 Instance = roblox.Instance
+Vector3 = roblox.Vector3
+CFrame = roblox.CFrame
 task = require("@lune/task")
 
 for _, className in { "ReplicatedStorage", "Players", "RunService" } do

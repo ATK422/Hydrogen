@@ -20,6 +20,8 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - `app:replace(original, fake)`: before `start`, swap a system for a fake. The fake's hooks run in the original's place in the boot order, and while the app runs the original table forwards reads and writes to the fake, so dependents that already hold it reach the fake. `app:stop()` (or a failed boot) restores the original.
 - `Hydrogen.loopback()` and the `Loopback` type: in-memory remotes and fake players, so one VM can run server and client systems together in a headless test. Messages still go through middleware, validation and the ready handshake. `join`, `leave`, `as` and `client` control the fake clients; `close` removes listeners and middleware added since it opened and stops the network for the next test.
 - README section "Testing your systems", including why `replace` redirects the original rather than having `use` return a proxy.
+- `App.new({ batching = true })`: events fired during a frame are collected per target and sent on `Heartbeat` as one remote call per target. They are dispatched in order on the receiving side. Reliable and unreliable events batch separately, and unreliable batches are split to stay under an estimated 900 bytes. Calling a function sends that target's pending events first. Skipped under `Hydrogen.loopback()`. Off by default.
+- `:Encode()` on all four network object kinds: payloads are packed into a `buffer` using the GreenTea schema (numbers, with 1, 2 or 4-byte integers when an integer range allows it; strings; booleans; `Vector3`; `CFrame`; buffers; arrays; tables; dictionaries; optionals; literals; tuples and varargs). Types it can't pack travel as plain values beside the buffer. Validation still runs on the decoded values, and middleware sees plain values. Off by default.
 
 ### Changed
 
@@ -31,6 +33,7 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - An error in a system's `init` or `start` is reported as `[HYDROGEN] System <name> failed in <hook>: ...` with the traceback. Boot still stops at the first error.
 - The server also creates `ReplicatedStorage.HydrogenNetworkUnreliableRemoteEvent`, and the ready handshake now carries the names fingerprint. Server and client must run the same Hydrogen version.
 - The README states that Hydrogen supports one app per side.
+- Network id `0` on the event remotes now marks a batch, so a receiver understands batches whether or not its own app batches.
 - The test runner exits explicitly once the suites finish, so a test that leaves a thread waiting can't keep Lune running.
 
 ### Fixed

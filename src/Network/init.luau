@@ -81,8 +81,8 @@ function Network.activeLoopback(): Loopback?
     return Runtime.Loopback :: any
 end
 
-function Network.init()
-    Runtime:init()
+function Network.init(options: Runtime.InitOptions?)
+    Runtime:init(options)
 end
 
 return Network

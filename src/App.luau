@@ -11,6 +11,8 @@ export type AppOptions = {
 	debug: boolean?,
 	-- Where debug output goes. Defaults to print.
 	output: ((message: string) -> ())?,
+	-- Collect the events fired during a frame and send them as one remote call per target.
+	batching: boolean?,
 }
 
 type PlayerState = {
@@ -33,6 +35,7 @@ local App = {
 	_started = false,
 	_stopped = false,
 	_debug = false,
+	_batching = false,
 	_output = print :: (message: string) -> (),
 }
 
@@ -107,6 +110,7 @@ end
 function App.new(options: AppOptions?): typeof(App)
 	local app = table.clone(App)
 	app._debug = options ~= nil and options.debug == true
+	app._batching = options ~= nil and options.batching == true
 	app._output = (options and options.output) or print
 	app._systems = {}
 	app._ordered = {}
@@ -216,7 +220,7 @@ function App:_boot()
 
 	-- Listeners register during init; the client then requests any queued events.
 	local networkBegan = os.clock()
-	Network.init()
+	Network.init({ batching = self._batching })
 	local networkTime = os.clock() - networkBegan
 
 	for _, system in self._ordered do

@@ -120,6 +120,9 @@ local function disconnect()
 	Runtime.PlayerQueues = {}
 	Runtime.ReadyPlayers = {}
 	Runtime.DepartedPlayers = setmetatable({}, { __mode = "k" }) :: any
+	Runtime.Batching = false
+	Runtime.Batches = {}
+	Runtime.ServerBatch = nil
 	Runtime.Loopback = nil
 end
 

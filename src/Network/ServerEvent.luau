@@ -1,15 +1,18 @@
 local gt = require("../../roblox_packages/gt")
+local Codec = require("./Codec")
 local Middleware = require("./Middleware")
 local Runtime = require("./Runtime")
 
 export type ServerEvent<T...> = Runtime.InnerNetworkInfo<T...> & {
     _listeners: { (T...) -> () },
+    _codec: Codec.Codec?,
     On: (self: ServerEvent<T...>, callback: (T...) -> ()) -> () -> (),
     Fire: (self: ServerEvent<T...>, player: Player | { Player }, T...) -> (),
     FireAll: (self: ServerEvent<T...>, T...) -> (),
     FireExcept: (self: ServerEvent<T...>, player: Player | { Player }, T...) -> (),
     Use: (self: ServerEvent<T...>, middleware: Middleware.Middleware<T...>) -> () -> (),
     Unreliable: (self: ServerEvent<T...>) -> ServerEvent<T...>,
+    Encode: (self: ServerEvent<T...>) -> ServerEvent<T...>,
 }
 
 local function toPlayers(player: Player | { Player }): { Player }
@@ -29,12 +32,13 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
     event._middleware = {}
     event._listeners = {}
     event._schema = gt.build(...)
+    event._codec = nil
 
     local function forward(players: { Player }, ...: any)
         if Middleware.dropped(...) then
             return
         end
-        Runtime:fireClientEvent(name, players, ...)
+        Runtime:fireClientEvent(name, players, Codec.encodeWith(event._codec, ...))
     end
 
     local function send(players: { Player }, ...: any)
@@ -97,13 +101,37 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
         return self
     end
 
+    -- Packs payloads into a buffer using the schema. Both sides must agree, so call it in the
+    -- shared definition. Middleware and listeners still see the plain values.
+    function event:Encode(): ServerEvent<T...>
+        self._codec = Codec.new(self._schema, name)
+        return self
+    end
+
     function event:Use(middleware: Middleware.Middleware<T...>): () -> ()
         return Middleware.add(self._middleware, middleware)
     end
 
+    local function receive(...: any)
+        deliver(Middleware.run(event._middleware, "ServerEvent", name, "incoming", "event", nil, nil, ...))
+    end
+
+    local function receiveDecoded(ok: boolean, ...: any)
+        if not ok then
+            warn(`[HYDROGEN] Dropped undecodable {name} from server: {(...)}`)
+            return
+        end
+        receive(...)
+    end
+
     Runtime:registerNetworkObject(name, event)
     Runtime:registerEventHandler(name, function(...)
-        deliver(Middleware.run(event._middleware, "ServerEvent", name, "incoming", "event", nil, nil, ...))
+        local codec = event._codec
+        if codec then
+            receiveDecoded(pcall(codec.decode, ...))
+        else
+            receive(...)
+        end
     end)
 
     return event
