@@ -3,6 +3,7 @@ local ServerEvent = require("@self/ServerEvent")
 local ClientFunction = require("@self/ClientFunction")
 local ServerFunction = require("@self/ServerFunction")
 local Runtime = require("@self/Runtime")
+local Loopback = require("@self/Loopback")
 local Middleware = require("@self/Middleware")
 
 export type ClientEvent<T...> = ClientEvent.ClientEvent<T...>
@@ -14,6 +15,7 @@ export type Middleware<T...> = Middleware.Middleware<T...>
 export type AnyMiddleware = Middleware.AnyMiddleware
 export type LoggerOptions = Middleware.LoggerOptions
 export type RateLimitOptions = Middleware.RateLimitOptions
+export type Loopback = Loopback.Loopback
 
 export type Namespace = {
     clientEvent: typeof(ClientEvent.new),
@@ -33,6 +35,7 @@ Network.useMiddleware = Middleware.use
 Network.logger = Middleware.logger
 Network.rateLimit = Middleware.rateLimit
 Network.DROP = Middleware.DROP
+Network.loopback = Loopback.new
 
 -- Prefixes every name with "prefix/", so places can reuse names without clashing.
 function Network.namespace(prefix: string): Namespace
@@ -71,6 +74,11 @@ end
 -- Counts the network objects reachable from a module's return value.
 function Network.countObjects(value: any): number
     return Runtime:countObjects(value)
+end
+
+-- The open loopback, if a test opened one.
+function Network.activeLoopback(): Loopback?
+    return Runtime.Loopback :: any
 end
 
 function Network.init()

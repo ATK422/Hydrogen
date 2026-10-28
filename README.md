@@ -40,10 +40,11 @@ Hydrogen.useMiddleware  -- add middleware to every network object
 Hydrogen.logger         -- build a logging middleware for debugging
 Hydrogen.rateLimit      -- build a middleware that drops a player's messages beyond a rate
 Hydrogen.DROP           -- return this from a middleware to stop a message
+Hydrogen.loopback       -- headless tests: one VM plays the server and fake clients
 Hydrogen.gt             -- GreenTea, for writing schemas
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace` and `Hydrogen.AppOptions`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback` and `Hydrogen.AppOptions`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -309,7 +310,7 @@ It only limits what the server receives from clients (incoming events and functi
 
 ### Booting the app
 
-Run one app on the server and one on each client. **Hydrogen supports one app per side.** The dependency graph and the network runtime are shared by the whole Luau VM, so a second app on the same side shares them instead of getting its own.
+Run one app on the server and one on each client. **Hydrogen supports one app per side.** The dependency graph and the network runtime are shared by the whole Luau VM, so a second app on the same side shares them instead of getting its own. The exception is a test under [`Hydrogen.loopback`](#testing-your-systems), where a server app and a client app can share one VM.
 
 ```luau
 -- ServerScriptService/Main.server.luau
@@ -337,6 +338,7 @@ App methods:
 - `app:addSystem(system)` / `app:addSystems({ ... })`: add systems directly.
 - `app:addSystemsFolders(a, b, ...)`: require every ModuleScript in each instance and add the ones that are systems. An instance that is itself a ModuleScript is required too. Non-systems are skipped with a warning, and an instance with no systems at all warns.
 - `app:addNetwork(a, b, ...)`: require every ModuleScript in each instance (again including the instance itself if it is a ModuleScript) so their network objects get registered. If the modules' return values hold no network objects, it warns `[HYDROGEN] addNetwork found no network objects in <name>`; that usually means the wrong instance was passed.
+- `app:replace(original, fake)`: before `start`, swap a system for a fake (see [Testing your systems](#testing-your-systems)).
 - `app:start()`: boot. Systems added after this are `init`ed and `start`ed immediately.
 - `app:stop()`: run the shutdown sequence (see [Player and shutdown hooks](#player-and-shutdown-hooks)). Called for you by `BindToClose` on the server; runs once.
 
@@ -366,6 +368,96 @@ What `app:start()` does, in order:
 - `serverFunction:Fire` invokes a single client and yields until it answers or the timeout (10 seconds by default) runs out.
 - Middleware added after a message is queued does not run on it; add middleware before firing anything.
 
+### Testing your systems
+
+Two tools let a test start real systems without a running game: `app:replace` swaps a dependency for a fake, and `Hydrogen.loopback()` stands in for the remotes so client and server systems can talk in one VM. Both work under [Lune](https://lune-org.github.io/docs) and in Studio. `test/Testing.luau` in this repository has runnable examples.
+
+#### Faking a dependency with `app:replace`
+
+```luau
+local Shop = require(Systems.Shop) -- Shop does `local Data = use(DataSystem)`
+local DataSystem = require(Systems.Data)
+
+local fakeData = {
+	getCoins = function(player)
+		return 500
+	end,
+}
+
+local net = Hydrogen.loopback() -- see below; gives the test players and a fresh network
+local app = Hydrogen.App.new()
+app:addSystem(Shop)
+app:replace(DataSystem, fakeData)
+app:start()
+
+-- ... exercise Shop; every Data.getCoins call it makes reaches fakeData ...
+
+app:stop()
+net:close()
+```
+
+What `replace` does:
+
+- It must be called before `app:start()`. The original is added to the app if it wasn't already.
+- The fake takes the original's place in the boot order: its `init`, `start`, `playerAdded`, `playerRemoving` and `stop` run where the original's would have, and the original's hooks don't run. The order comes from the original's dependencies; a fake's own `use` calls don't move it. Errors from the fake's hooks name it `<original> (replaced)`.
+- While the app runs, **the original table forwards to the fake**. Dependents keep the table `use` gave them at require time, so `Data.getCoins(...)` and `Data:save(...)` reach the fake. Reads and writes through it (including `self.x = ...` inside the fake's methods) go to the fake. Plain modules that `require` the original directly see the fake too.
+- `app:stop()` puts the original back, and so does a boot that errors. Stop each app at the end of the test.
+- Only one running app can replace a given system at a time; a second errors with `already replaced by a running app`.
+- Don't copy a field out of a dependency in the constructor (`local getCoins = use(Data).getCoins`): that keeps the original function, which a later `replace` can't reach. Keep the table and look fields up when you call them.
+- A system whose table is frozen (`table.freeze`) or has a locked metatable can't be replaced.
+
+#### Client and server in one VM with `Hydrogen.loopback`
+
+`Hydrogen.loopback()` replaces the remotes with in-memory ones, so one VM acts as the server and as every client. Open it before `app:start()`, then add both sides' systems, to one app or to a server app and a client app:
+
+```luau
+local net = Hydrogen.loopback()
+local alice = net:join("Alice")
+
+local app = Hydrogen.App.new()
+app:addSystems({ ShopServer, ShopClient })
+app:start() -- ShopClient's Buy:Fire("sword") reaches ShopServer as coming from alice
+
+local bob = net:join("Bob")
+net:as(bob, function()
+	Remotes.Buy:Fire("shield") -- with two clients, say which one is sending
+end)
+
+app:stop()
+net:close()
+```
+
+Loopback methods:
+
+- `net:join(name?)`: add a fake client and return its player. Apps run `playerAdded` for it. Once the network runs, the client does its ready handshake, so events the server sent it before then are delivered, as in a real game.
+- `net:leave(player)`: the player leaves. Apps run `playerRemoving`; later sends to the player are dropped.
+- `net:players()`: the players still in. `serverEvent:FireAll` and `FireExcept` send to these.
+- `net:as(player, fn, ...)`: run `fn` as that client. Client events and functions fired inside it come from `player`. With exactly one client you don't need `as`; with several, a client send outside `as` errors.
+- `net:client()`: the client the running code acts as, inside `as` or inside a server event or function handler running on that client. Every fake client shares the same client-side listeners, so this is how a test tells them apart.
+- `net:close()`: everyone leaves, listeners and middleware added since the loopback opened are removed, and the network stops so the next test can start it again. Network names stay registered.
+
+How it differs from real remotes:
+
+- Messages still go through ids, middleware in both directions, schema validation, and the queue and handshake rules above. An invalid payload is dropped with the same warning.
+- Delivery is immediate: when `Fire` returns, listeners have already run up to their first yield. Each event handler gets its own thread, so its errors are reported as `[HYDROGEN] Loopback event handler failed` instead of reaching the sender. Function errors reach the caller, as with `InvokeServer`.
+- Tables are copied and lose their metatables, as remotes do. Unreliable events are delivered reliably.
+- Fake players are tables with `Name`, `DisplayName`, `UserId` (negative), `Parent` and `Kick` (which makes them leave). They aren't Instances, so `player:IsA(...)` and other Instance methods don't exist on them.
+- `RunService:IsServer()` and `IsClient()` still return what the host says, so systems that branch on them see the same answer on both sides.
+- Under Lune, a network that an app started without a loopback is reset when the next loopback opens. In Studio, open the loopback before any app starts.
+
+Systems are still module singletons: state a system keeps in its own tables lives across tests in the same VM. Reset it in `init`, or use one test file per scenario.
+
+#### Design: why `replace` redirects the original
+
+`use(Other)` runs once, when the dependent module is required, and returns the `Other` table. By the time a test calls `replace`, every dependent already holds that table. Two ways to make them reach a fake were considered:
+
+- **`use` returns a forwarding proxy** whose target can be swapped. Dependents would reach the fake without the original being touched. But every field access from a dependent would go through a metatable in every game, test or not. `self` inside the original's methods would be the proxy, so `self == Data` breaks and writes need forwarding too. And modules that `require` a system without `use` would still see the original.
+- **`replace` redirects the original table** (chosen). While the app runs, the original is emptied and given a metatable that forwards reads and writes to the fake; `stop` restores its fields and metatable. Games that never call `replace` pay nothing, and every holder of the table reaches the fake, whether it got it from `use` or `require`. The costs: the original is mutated while the app runs, frozen tables and locked metatables can't be replaced, and functions copied out of a dependency before the swap keep pointing at the original.
+
+**Replacements belong to an app, but act on the whole VM while that app runs.** Systems are constructed once per VM, at require time, so every app shares one `Data` table; a swap can't be visible to one app and not another. An app records its replacements, applies them at `start` and undoes them at `stop`, and two running apps can't replace the same system.
+
+**The dependency graph and network runtime stay module-global.** Moving them into each app wouldn't isolate apps, because the systems and network objects themselves are module singletons. Real isolation would need `define` to build a fresh system per app, so `require(DataSystem)` would return a definition instead of the system, which breaks every game that calls systems directly. For tests, `app:stop()` and `loopback:close()` undo what a test changes instead.
+
 ---
 
 ## Part 2: Working on Hydrogen itself
@@ -390,7 +482,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 55 | Passed: 55` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 62 | Passed: 62` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -398,16 +490,18 @@ Expected output ends with `Tests Ran: 55 | Passed: 55` and `status: OK`. A few `
 src/
   init.luau            public API and exported types
   App.luau             App: collects systems, runs init -> Network.init -> start, player and stop hooks
-  Definition.luau      define/use, system ids, dependency graph wiring, lifecycle-stripping type function
+  Definition.luau      define/use, system ids, dependency graph wiring, replace redirects, lifecycle-stripping type function
   Graph.luau           generic dependency graph with topological sort and cycle detection
   Network/
     init.luau          exports constructors and Network.init
     Runtime.luau       remotes, name->id mapping, queues, ready handshake, dispatch
     Middleware.luau    middleware context/types, onion ordering, global middleware, logger
+    Loopback.luau      in-memory remotes and fake players for headless tests
     ClientEvent.luau   ServerEvent.luau  ClientFunction.luau  ServerFunction.luau
 test/
   _run.luau            Lune entry point: mocks Roblox globals, patches require, runs suites
   App.luau  Definition.luau  Graph.luau  Network.luau
+  Testing.luau         app:replace and Hydrogen.loopback, used the way a game's tests would
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
 ```
@@ -417,11 +511,11 @@ pesde.toml             package manifest, scripts, dependencies, version
 Tests run outside Roblox under Lune. `test/_run.luau`:
 
 - builds a DataModel with `@lune/roblox` and sets the `game` / `Instance` / `task` globals;
-- stubs `RunService` so `IsClient()` and `IsServer()` both return `false` (remotes, the handshake and the `Players` / `BindToClose` connections are not exercised end to end; tests call `app:_addPlayer` / `app:_removePlayer` with fake players instead);
+- stubs `RunService` so `IsClient()` and `IsServer()` both return `false`. Real remotes and the `Players` / `BindToClose` connections are never exercised. `test/Testing.luau` runs the network end to end through `Hydrogen.loopback()`; the other suites call `app:_addPlayer` / `app:_removePlayer` with fake players;
 - overrides `require` so `@self/` and relative paths resolve from the calling file, and redirects GreenTea to its pesde install path. Lune can't require Instances, so a test sets `_G.instanceModules[moduleScript] = value` and `require(moduleScript)` then returns `value`;
-- calls each test module, then runs [frktest](https://github.com/itsfrank/frktest).
+- calls each test module, runs [frktest](https://github.com/itsfrank/frktest), then exits with `process.exit`. The explicit exit matters: the server function timeout test yields the main thread and resumes it from a timer, and without the exit Lune can keep running after the last suite.
 
-To add a test file: create `test/Thing.luau` that returns a function registering `test.suite(...)` blocks (copy the shape of `test/Graph.luau`), then add `require("./Thing")()` next to the others in `test/_run.luau`. The Network suite resets `Runtime` state in `test.on_suite_enter`; do the same if you touch Runtime.
+To add a test file: create `test/Thing.luau` that returns a function registering `test.suite(...)` blocks (copy the shape of `test/Graph.luau`), then add `require("./Thing")()` next to the others in `test/_run.luau`. The Network and Testing suites reset `Runtime` state in `test.on_suite_enter`; do the same if you touch Runtime. The Testing suite also stops its apps and closes its loopbacks in `test.on_test_leave`, so a failed test doesn't leak a running network into the next one.
 
 ### Conventions
 

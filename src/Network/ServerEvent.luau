@@ -13,7 +13,7 @@ export type ServerEvent<T...> = Runtime.InnerNetworkInfo<T...> & {
 }
 
 local function toPlayers(player: Player | { Player }): { Player }
-    if typeof(player) == "Instance" then
+    if Runtime:isPlayer(player) then
         return { player :: Player }
     end
 
@@ -69,7 +69,7 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
 
     function event:FireAll(...: T...)
         self._schema:assert(...)
-        send(game:GetService("Players"):GetPlayers(), ...)
+        send(Runtime:getPlayers(), ...)
     end
 
     function event:FireExcept(player: Player | { Player }, ...: T...)
@@ -81,7 +81,7 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
         end
 
         local players = {}
-        for _, target in game:GetService("Players"):GetPlayers() do
+        for _, target in Runtime:getPlayers() do
             if not skip[target] then
                 table.insert(players, target)
             end

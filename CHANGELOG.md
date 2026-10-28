@@ -17,6 +17,9 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - `event:Unreliable()` on server and client events, which sends over an `UnreliableRemoteEvent`. Unreliable events are never queued.
 - `Hydrogen.define(id, constructor)`, for an explicit id instead of the calling module's name.
 - `App.new({ debug = true })` prints how long each system's `init` and `start` took. `output` changes where it goes.
+- `app:replace(original, fake)`: before `start`, swap a system for a fake. The fake's hooks run in the original's place in the boot order, and while the app runs the original table forwards reads and writes to the fake, so dependents that already hold it reach the fake. `app:stop()` (or a failed boot) restores the original.
+- `Hydrogen.loopback()` and the `Loopback` type: in-memory remotes and fake players, so one VM can run server and client systems together in a headless test. Messages still go through middleware, validation and the ready handshake. `join`, `leave`, `as` and `client` control the fake clients; `close` removes listeners and middleware added since it opened and stops the network for the next test.
+- README section "Testing your systems", including why `replace` redirects the original rather than having `use` return a proxy.
 
 ### Changed
 
@@ -28,6 +31,7 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - An error in a system's `init` or `start` is reported as `[HYDROGEN] System <name> failed in <hook>: ...` with the traceback. Boot still stops at the first error.
 - The server also creates `ReplicatedStorage.HydrogenNetworkUnreliableRemoteEvent`, and the ready handshake now carries the names fingerprint. Server and client must run the same Hydrogen version.
 - The README states that Hydrogen supports one app per side.
+- The test runner exits explicitly once the suites finish, so a test that leaves a thread waiting can't keep Lune running.
 
 ### Fixed
 

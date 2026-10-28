@@ -20,6 +20,7 @@ export type AnyMiddleware = Network.AnyMiddleware
 export type LoggerOptions = Network.LoggerOptions
 export type RateLimitOptions = Network.RateLimitOptions
 export type Namespace = Network.Namespace
+export type Loopback = Network.Loopback
 
 return {
 	App = App,
@@ -32,6 +33,8 @@ return {
 	useMiddleware = Network.useMiddleware,
 	logger = Network.logger,
 	rateLimit = Network.rateLimit,
+	-- Headless tests: this VM plays the server and fake clients, without real remotes.
+	loopback = Network.loopback,
 	-- Return this from a middleware to stop the message.
 	DROP = Network.DROP,
 	-- The GreenTea instance Hydrogen validates with, so schemas always match its version.

@@ -138,12 +138,13 @@ require("./Graph")()
 require("./Definition")()
 require("./App")()
 require("./Network")()
+require("./Testing")()
 
 local frktest = require("@pkg/frktest")
 local console_reporter = frktest.reporters.console_reporter
 
 console_reporter.init()
 
-if not frktest.run() then
-	process.exit(1)
-end
+-- Exit explicitly: a test that yields the main thread and is resumed from a timer (the
+-- server function timeout test) can otherwise keep Lune running after the last suite.
+process.exit(if frktest.run() then 0 else 1)

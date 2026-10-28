@@ -24,6 +24,10 @@ local App = {
 	-- Systems in dependency order, filled by start.
 	_ordered = {} :: { System },
 	_players = {} :: { [Player]: PlayerState },
+	-- Original -> fake, from replace. Redirected while the app runs.
+	_replacements = {} :: { [System]: System },
+	-- Originals this app redirected, so it never undoes another app's.
+	_redirected = {} :: { System },
 	-- Players whose playerRemoving hooks are still running.
 	_removing = 0,
 	_started = false,
@@ -107,6 +111,8 @@ function App.new(options: AppOptions?): typeof(App)
 	app._systems = {}
 	app._ordered = {}
 	app._players = {}
+	app._replacements = {}
+	app._redirected = {}
 	app._removing = 0
 	app._started = false
 	app._stopped = false
@@ -157,10 +163,48 @@ function App:addNetwork(...: Instance)
 	end
 end
 
+-- Swaps a system for a fake until app:stop(). The fake's hooks run in the original's place
+-- in the order, and the original forwards every field to the fake, so dependents that
+-- already hold it call the fake. The original is added to the app if it wasn't.
+function App:replace(original: System, fake: { [any]: any })
+	if self._started then
+		error(`[HYDROGEN] replace must be called before app:start()`, 2)
+	end
+	if not Definition.isDefined(original) then
+		error(`[HYDROGEN] replace expects a system made with Hydrogen.define as the original`, 2)
+	end
+	if type(fake) ~= "table" or fake == original then
+		error(`[HYDROGEN] replace expects a fake table to stand in for {Definition.describe(original)}`, 2)
+	end
+
+	if not table.find(self._systems, original) then
+		table.insert(self._systems, original)
+	end
+	self._replacements[original] = fake :: any
+end
+
 function App:start()
 	self._started = true
 
-	self._ordered = Definition.order(self._systems)
+	if next(self._replacements) == nil then
+		self:_boot()
+		return
+	end
+
+	-- A failed boot must not leave the originals pointing at this app's fakes.
+	self:_redirect()
+	local ok, err = pcall(self._boot, self)
+	if not ok then
+		self:_restore()
+		error(err, 0)
+	end
+end
+
+function App:_boot()
+	self._ordered = {}
+	for index, system in Definition.order(self._systems) do
+		self._ordered[index] = self._replacements[system] or system
+	end
 
 	local initTimes: { [System]: number } = {}
 	local startTimes: { [System]: number } = {}
@@ -186,6 +230,24 @@ function App:start()
 	self:_listen()
 end
 
+function App:_redirect()
+	for original, fake in self._replacements do
+		local ok, err = pcall(Definition.redirect, original, fake)
+		if not ok then
+			self:_restore()
+			error(err, 0)
+		end
+		table.insert(self._redirected, original)
+	end
+end
+
+function App:_restore()
+	for _, original in self._redirected do
+		Definition.restore(original)
+	end
+	table.clear(self._redirected)
+end
+
 -- Slowest systems first, so the ones worth looking at are at the top.
 function App:_printTimings(total: number, network: number, initTimes: { [System]: number }, startTimes: { [System]: number })
 	local systems = table.clone(self._ordered)
@@ -201,7 +263,7 @@ function App:_printTimings(total: number, network: number, initTimes: { [System]
 end
 
 -- Runs playerRemoving for every player still in the game, waits for all of those
--- hooks to finish, then runs stop hooks in reverse dependency order.
+-- hooks to finish, then runs stop hooks in reverse dependency order and undoes replace.
 -- On the server this is bound to game:BindToClose.
 function App:stop()
 	if self._stopped then
@@ -224,10 +286,22 @@ function App:stop()
 	for index = #self._ordered, 1, -1 do
 		runHook(self._ordered[index], "stop")
 	end
+
+	self:_restore()
 end
 
--- Players and shutdown only exist in a running game; the tests call the hooks directly.
+-- Players and shutdown only exist in a running game or under loopback; the tests call the hooks directly otherwise.
 function App:_listen()
+	local loopback = Network.activeLoopback()
+	if loopback then
+		loopback:watch(function(player)
+			self:_addPlayer(player)
+		end, function(player)
+			self:_removePlayer(player)
+		end)
+		return
+	end
+
 	if not (RunService:IsServer() or RunService:IsClient()) then
 		return
 	end

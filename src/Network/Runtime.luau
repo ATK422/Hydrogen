@@ -35,6 +35,13 @@ export type QueuedClientEvent = {
     args: PackedArgs,
 }
 
+-- What the runtime needs from Hydrogen.loopback(), which stands in for the remotes and players.
+export type LoopbackHost = {
+    players: (self: any) -> { Player },
+    owns: (self: any, value: any) -> boolean,
+    handshake: (self: any) -> (),
+}
+
 local Runtime = {
     Initialized = false,
     RemoteEvent = nil :: RemoteEvent?,
@@ -54,7 +61,17 @@ local Runtime = {
     ReadyPlayers = {} :: { [Player]: boolean },
     -- Weak so players who left can still be garbage collected.
     DepartedPlayers = setmetatable({}, { __mode = "k" }) :: { [Player]: boolean },
+    -- Set while a loopback is open: this VM is the server and every fake client at once.
+    Loopback = nil :: LoopbackHost?,
 }
+
+local function isClient(): boolean
+    return Runtime.Loopback ~= nil or RunService:IsClient()
+end
+
+local function isServer(): boolean
+    return Runtime.Loopback ~= nil or RunService:IsServer()
+end
 
 local function unpackArgs(args: PackedArgs): ...any
     return table.unpack(args, 1, args.n or #args)
@@ -87,7 +104,10 @@ end
 -- when writing the docs, ensure you say that this can yield on the client (remotes + ready handshake)
 function Runtime:init()
     if Runtime.Initialized then
-        warn(`[HYDROGEN] Network already initialized`)
+        -- Under loopback a server app and a client app share this runtime.
+        if not Runtime.Loopback then
+            warn(`[HYDROGEN] Network already initialized`)
+        end
         return
     end
 
@@ -96,7 +116,7 @@ function Runtime:init()
     Runtime.RemoteFunction = getNetworkObjectOfType("RemoteFunction") :: RemoteFunction
     Runtime:assignIds()
 
-    if RunService:IsClient() then
+    if isClient() then
         (Runtime.RemoteEvent :: RemoteEvent).OnClientEvent:Connect(function(id, ...)
             Runtime:handleEvent(id, ...)
         end);
@@ -110,7 +130,7 @@ function Runtime:init()
         end
     end
 
-    if RunService:IsServer() then
+    if isServer() then
         (Runtime.RemoteEvent :: RemoteEvent).OnServerEvent:Connect(function(player, id, ...)
             Runtime:handleEvent(id :: number, player, ...)
         end);
@@ -127,14 +147,21 @@ function Runtime:init()
             return Runtime:handleFunction(id, player, ...)
         end
 
-        Players.PlayerRemoving:Connect(function(player)
-            Runtime:removePlayer(player)
-        end)
+        -- Loopback players leave through loopback:leave, which does this itself.
+        if not Runtime.Loopback then
+            Players.PlayerRemoving:Connect(function(player)
+                Runtime:removePlayer(player)
+            end)
+        end
     end
 
     Runtime.Initialized = true
     Runtime:flushOutgoingQueue()
-    Runtime:requestReady()
+    if Runtime.Loopback then
+        Runtime.Loopback:handshake()
+    else
+        Runtime:requestReady()
+    end
 end
 
 function Runtime:assignIds()
@@ -238,6 +265,19 @@ function Runtime:isDeparted(player: Player): boolean
     return Runtime.DepartedPlayers[player] == true or player.Parent == nil
 end
 
+-- Players:GetPlayers(), or the loopback's fake clients while one is open.
+function Runtime:getPlayers(): { Player }
+    if Runtime.Loopback then
+        return Runtime.Loopback:players()
+    end
+    return Players:GetPlayers()
+end
+
+-- A single player rather than a list; loopback players are tables.
+function Runtime:isPlayer(value: any): boolean
+    return typeof(value) == "Instance" or (Runtime.Loopback ~= nil and Runtime.Loopback:owns(value))
+end
+
 function Runtime:removePlayer(player: Player)
     Runtime.DepartedPlayers[player] = true
     Runtime.ReadyPlayers[player] = nil
@@ -295,7 +335,7 @@ end
 
 -- Client asks the server for every event queued before this runtime started.
 function Runtime:requestReady()
-    if not RunService:IsClient() then
+    if not isClient() then
         return
     end
 
