@@ -2,7 +2,7 @@
 
 All notable changes to Hydrogen are listed here. Versions follow [Semantic Versioning](https://semver.org); while the version is `0.x`, a minor bump can contain breaking changes.
 
-## Unreleased
+## 0.4.0
 
 ### Added
 

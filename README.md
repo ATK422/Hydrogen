@@ -1,12 +1,13 @@
 # Hydrogen
 
-A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you three things:
+A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you four things:
 
 - **Systems**: modules with `init` / `start`, player (`playerAdded` / `playerRemoving`) and shutdown (`stop`) hooks that run in dependency order.
 - **App**: collects your systems (and network definitions) and boots them.
-- **Network**: typed, schema-checked remote events and functions over a single `RemoteEvent` + `RemoteFunction`, with queuing so nothing fired during startup is lost, and middleware (including a built-in logger) for inspecting or transforming traffic.
+- **Network**: typed, schema-checked remote events and functions. Nothing fired during startup is lost, because events are queued until the network and each client are ready. Middleware inspects or transforms traffic, and a logger and a rate limiter are built in. Events can be unreliable, and batching and buffer encoding are there when traffic gets heavy.
+- **Testing**: swap a system for a fake with `app:replace`, and run server and client systems together in one VM with `Hydrogen.loopback`.
 
-Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. License: MIT.
+Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current version: **0.4.0** (see [CHANGELOG.md](CHANGELOG.md)). License: MIT.
 
 ---
 
@@ -23,6 +24,20 @@ pesde install
 ```
 
 Hydrogen validates network payloads with [GreenTea](https://github.com/corecii/greentea). Write your schemas with `Hydrogen.gt`, the same GreenTea copy Hydrogen checks with, so you don't need to install it separately.
+
+### Upgrading from 0.3
+
+Most of 0.4 is new and opt-in. These changes can break a 0.3 game:
+
+- **Registering a network name twice errors** (it used to warn and keep the first). Rename one, or put place-specific objects in a [namespace](#namespaces).
+- **`serverFunction:Fire` times out after 10 seconds** instead of waiting forever. Raise it per function with `:SetTimeout(seconds)`, or use `:SetTimeout(math.huge)` for the old behaviour. See [Server function timeouts](#server-function-timeouts).
+- **The server and every client must run the same Hydrogen version.** The ready handshake changed, and the server creates a third remote (`HydrogenNetworkUnreliableRemoteEvent`). In practice the server and its clients always share one package, so this only matters if you vendor Hydrogen in two places.
+
+Things you can now delete from game code:
+
+- `player.Parent` checks before firing to a player: sends to players who have left are dropped.
+- Hand-built ordering between systems' `PlayerRemoving` handlers, such as a save-after-everything hook: use [player and shutdown hooks](#player-and-shutdown-hooks).
+- `:: Folder` casts on `WaitForChild` results passed to `addNetwork` / `addSystemsFolders`.
 
 ### Public API
 
