@@ -2,7 +2,7 @@
 
 A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you three things:
 
-- **Systems**: modules with `init` / `start` lifecycle hooks that run in dependency order.
+- **Systems**: modules with `init` / `start`, player (`playerAdded` / `playerRemoving`) and shutdown (`stop`) hooks that run in dependency order.
 - **App**: collects your systems (and network definitions) and boots them.
 - **Network**: typed, schema-checked remote events and functions over a single `RemoteEvent` + `RemoteFunction`, with queuing so nothing fired during startup is lost, and middleware (including a built-in logger) for inspecting or transforming traffic.
 
@@ -35,12 +35,15 @@ Hydrogen.clientEvent    -- client -> server event
 Hydrogen.serverEvent    -- server -> client event
 Hydrogen.clientFunction -- client -> server request/response
 Hydrogen.serverFunction -- server -> client request/response
+Hydrogen.namespace      -- prefix network names, e.g. Hydrogen.namespace("Lobby").clientEvent("Play")
 Hydrogen.useMiddleware  -- add middleware to every network object
 Hydrogen.logger         -- build a logging middleware for debugging
+Hydrogen.rateLimit      -- build a middleware that drops a player's messages beyond a rate
+Hydrogen.DROP           -- return this from a middleware to stop a message
 Hydrogen.gt             -- GreenTea, for writing schemas
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware` and `Hydrogen.LoggerOptions`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace` and `Hydrogen.AppOptions`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -91,12 +94,43 @@ end)
 
 Rules worth knowing:
 
-- **The system's `id` is the ModuleScript's name** (e.g. `Logger`). It is read from the calling script, so call `define` at the top level of the module, once per module.
-- `init` and `start` are optional and are called with `:` (they receive the system as `self`).
+- **The system's `id` is the ModuleScript's name** (e.g. `Logger`). It is read from the calling script, so call `define` at the top level of the module, once per module. Dependency warnings, cycle errors and boot errors name systems by the module's full name (e.g. `ServerScriptService.Lobby.Systems.Data`), so two systems called `Data` can be told apart.
+- **Or pass the id yourself:** `Hydrogen.define("Data", function(use) ... end)`. Do this whenever `define` is called through a wrapper function, because the inferred id would be the wrapper's module. An explicit id is also what messages show.
+- Every hook is optional and called with `:` (it receives the system as `self`).
 - `use(other)` must be called synchronously inside the constructor. It records the dependency and returns `other` (typed without its lifecycle fields, so you can't call `init`/`start` on it by accident).
 - Dependencies must also be added to the same app, otherwise Hydrogen warns `System X depends on system Y which was not added to the app`.
 - Circular `use` chains error at `app:start()` with the cycle printed: `Cyclic system dependency: A -> B -> A`.
+- An error in `init` or `start` still stops the boot, but is reported as `[HYDROGEN] System <full name> failed in start: <error and traceback>`.
 - Systems with no dependency relationship start in the order they were added.
+
+### Player and shutdown hooks
+
+Systems can also define `playerAdded`, `playerRemoving` and `stop`:
+
+```luau
+function Data:playerAdded(player: Player)
+	-- load the profile
+end
+
+function Data:playerRemoving(player: Player)
+	-- save the profile
+end
+
+function Data:stop()
+	-- flush anything left before the server shuts down
+end
+```
+
+Hydrogen calls them in dependency order, so you don't depend on the order Roblox runs `PlayerRemoving` connections in:
+
+- `playerAdded` runs on each system in dependency order (dependencies first), for players already in the game when `app:start()` finishes and for everyone who joins later.
+- `playerRemoving` runs in **reverse** dependency order. A system that `use`s `Data` gets its `playerRemoving` before `Data` saves, so it can still record a forfeit or a last score.
+- `stop` runs in reverse dependency order on shutdown. On the server, `app:start()` binds `app:stop()` to `game:BindToClose`. `stop` first runs `playerRemoving` for every player still in the game, waits until every `playerRemoving` hook has returned, then calls the `stop` hooks.
+- The hooks for one player run one after another in a single thread, so a hook that yields (a DataStore call) delays the next system's hook for that player. Different players don't wait for each other.
+- If a player leaves while their `playerAdded` hooks are still running, `playerRemoving` waits for them to finish. Every system sees `playerAdded` before `playerRemoving` for the same player, and each exactly once.
+- A hook that errors is reported with `[HYDROGEN] <hook> failed in system <full name>` and the remaining systems still run, so one broken system can't stop `Data` from saving.
+- A system added after `app:start()` gets `playerAdded` for players already in the game.
+- The player hooks run on the client too (for every player, including the local one). `stop` is only bound on the server; on the client you can call `app:stop()` yourself.
 
 ### Network definitions
 
@@ -129,7 +163,42 @@ return {
 | `clientFunction` | client | `:Fire(...)` → returns | server | `:On(function(player, ...) return ... end)` |
 | `serverFunction` | server | `:Fire(player, ...)` → returns | client | `:On(function(...) return ... end)` |
 
+#### Namespaces
+
+`Hydrogen.namespace(prefix)` returns the four constructors with every name prefixed by `prefix/`. Use it when several places share code, so a place's `Play` can't collide with a common `Play`:
+
+```luau
+local Lobby = Hydrogen.namespace("Lobby")
+
+return {
+	Play = Lobby.clientEvent("Play", gt.string()),                    -- sent as "Lobby/Play"
+	Joined = Lobby.namespace("Queue").serverEvent("Joined", gt.number()), -- sent as "Lobby/Queue/Joined"
+}
+```
+
+The prefixed name is the object's name everywhere: on the wire, in `context.name` and in the logger.
+
 Every `:On` returns a disconnect function. Events can have many listeners; a function has one handler (calling `:On` again replaces it).
+
+#### Unreliable events
+
+For data that the next message replaces anyway, such as a per-tick frame, call `:Unreliable()` on a `serverEvent` or `clientEvent`. It returns the event, so it chains onto the definition:
+
+```luau
+BattleFrame = Hydrogen.serverEvent("BattleFrame", gt.buffer()):Unreliable(),
+```
+
+The sender then uses an `UnreliableRemoteEvent`: messages can be lost or arrive out of order, and Roblox limits each one to about 900 bytes. Unreliable events are never queued. Anything sent before the network starts, or to a player whose client hasn't finished starting, is dropped. Only the sending side needs `:Unreliable()`, but calling it in the shared definition is simplest.
+
+#### Server function timeouts
+
+`serverFunction:Fire` waits for the client to answer, and a client (an exploiter, or one that just left) can simply never answer. So `Fire` errors with `[HYDROGEN] <name> timed out after 10s waiting for <player>` after **10 seconds** by default. Change it per function:
+
+```luau
+Confirm = Hydrogen.serverFunction("Confirm", gt.string())(gt.boolean()):SetTimeout(30),
+```
+
+`:SetTimeout(math.huge)` waits forever, which lets a client hang the calling thread for good. Call server functions from their own thread (`task.spawn`) if a slow client shouldn't hold up the rest of a system.
 
 Payloads are checked against the schema on both ends:
 
@@ -179,6 +248,8 @@ end
 | `player` | on the server, the single player involved (sender, or function target) |
 | `players` | on the server, every target of an outgoing `serverEvent` |
 
+To stop a message instead of passing it on, return `Hydrogen.DROP`. A dropped event never reaches the remote or the listeners. A dropped function request or response errors, because the caller is waiting for an answer.
+
 Attach it per object or globally. Each call returns a function that removes the middleware again.
 
 ```luau
@@ -218,9 +289,27 @@ Options:
 
 Because it's global middleware, the logger shows what is actually on the wire, after your own outgoing middleware and before your own incoming middleware.
 
+#### Rate limiting
+
+Schemas stop bad data, not floods. `Hydrogen.rateLimit(options)` builds a middleware that drops a player's messages once they go over a rate. Each player has a separate allowance for each network object:
+
+```luau
+Hydrogen.useMiddleware(Hydrogen.rateLimit({ perSecond = 20 }))                 -- every object
+Remotes.PlaceTower:Use(Hydrogen.rateLimit({ perSecond = 5, burst = 10 }))       -- one event
+Remotes.GetShop:UseRequest(Hydrogen.rateLimit({ perSecond = 2 }))               -- one function
+```
+
+Options:
+
+- `perSecond: number`: messages allowed per second, refilled continuously.
+- `burst: number?`: how many may arrive at once before the rate applies. Defaults to `perSecond`.
+- `onLimit: (context) -> ()?`: called for each dropped message, e.g. to log or kick. Nothing is logged by default.
+
+It only limits what the server receives from clients (incoming events and function requests). Responses and everything on the client pass through. A limited function request errors back to the client.
+
 ### Booting the app
 
-Run one app on the server and one on each client.
+Run one app on the server and one on each client. **Hydrogen supports one app per side.** The dependency graph and the network runtime are shared by the whole Luau VM, so a second app on the same side shares them instead of getting its own.
 
 ```luau
 -- ServerScriptService/Main.server.luau
@@ -244,27 +333,37 @@ app:start()
 
 App methods:
 
-- `App.new()`: a fresh app with its own system list.
+- `App.new(options?)`: a fresh app with its own system list. `options.debug = true` prints how long the boot took and how long each system's `init` and `start` took, slowest first. `options.output` changes where that goes (defaults to `print`).
 - `app:addSystem(system)` / `app:addSystems({ ... })`: add systems directly.
-- `app:addSystemsFolders(folderA, folderB, ...)`: require every descendant ModuleScript and add the ones that are systems. Non-systems are skipped with a warning.
-- `app:addNetwork(folder)`: require every descendant ModuleScript so their network objects get registered.
+- `app:addSystemsFolders(a, b, ...)`: require every ModuleScript in each instance and add the ones that are systems. An instance that is itself a ModuleScript is required too. Non-systems are skipped with a warning, and an instance with no systems at all warns.
+- `app:addNetwork(a, b, ...)`: require every ModuleScript in each instance (again including the instance itself if it is a ModuleScript) so their network objects get registered. If the modules' return values hold no network objects, it warns `[HYDROGEN] addNetwork found no network objects in <name>`; that usually means the wrong instance was passed.
 - `app:start()`: boot. Systems added after this are `init`ed and `start`ed immediately.
+- `app:stop()`: run the shutdown sequence (see [Player and shutdown hooks](#player-and-shutdown-hooks)). Called for you by `BindToClose` on the server; runs once.
+
+Both adders take any `Instance`, so the result of `WaitForChild` can be passed without a cast. On the client, anything outside the LocalScript's own descendants may not have replicated yet when it runs, so `WaitForChild` it first:
+
+```luau
+local playerScripts = script.Parent
+app:addSystemsFolders(script.Systems, playerScripts:WaitForChild("common"))
+```
 
 What `app:start()` does, in order:
 
 1. Sorts systems so dependencies come first.
 2. Calls every `init`.
-3. Starts the network. The server creates `ReplicatedStorage.HydrogenNetworkRemoteEvent` and `HydrogenNetworkRemoteFunction`. **On the client this yields** until those exist and until the server hands back any events queued for this player.
+3. Starts the network. The server creates `ReplicatedStorage.HydrogenNetworkRemoteEvent`, `HydrogenNetworkUnreliableRemoteEvent` and `HydrogenNetworkRemoteFunction`. **On the client this yields** until those exist and until the server hands back any events queued for this player.
 4. Calls every `start`.
+5. Starts the player hooks (`playerAdded` for players already in the game, then for joins) and, on the server, binds `app:stop()` to `BindToClose`.
 
 ### Network rules (read these before debugging)
 
 - **Register every network object before `app:start()`.** Objects created after the network starts are ignored with `[HYDROGEN] Network already initialized ignoring X registration`.
-- **The server and the client must register the same set of names.** Wire ids are assigned by sorting names alphabetically on each side, so a name that exists on one side only shifts every id after it. Put definitions in shared modules and `addNetwork` the same folder on both sides.
-- Names must be unique. Duplicates warn and are ignored.
+- **The server and the client must register the same set of names.** Wire ids are assigned by sorting names alphabetically on each side, so a name that exists on one side only shifts every id after it. Put definitions in shared modules and `addNetwork` the same folders on both sides. When a client connects it sends a fingerprint of its names. If it doesn't match the server's, both sides warn `[HYDROGEN] NETWORK MISMATCH`.
+- Names must be unique. Registering a name twice errors. Use `Hydrogen.namespace` to keep names from different places apart.
+- Events sent to a player who has left (or is leaving) are dropped. This covers sends from a `PlayerRemoving` handler, or after a yield, that would otherwise queue for a player who will never become ready.
 - Events fired before the network starts (e.g. in `init`) are queued and sent once it does. Server events aimed at a player whose client hasn't finished starting are held and delivered on that client's handshake.
 - **Functions are not queued.** Only call `clientFunction:Fire` / `serverFunction:Fire` from `start` or later; calling one earlier errors with `called before the network started`.
-- `serverFunction:Fire` invokes a single client and yields until it answers.
+- `serverFunction:Fire` invokes a single client and yields until it answers or the timeout (10 seconds by default) runs out.
 - Middleware added after a message is queued does not run on it; add middleware before firing anything.
 
 ---
@@ -291,14 +390,14 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 36 | Passed: 36` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 55 | Passed: 55` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
 ```
 src/
   init.luau            public API and exported types
-  App.luau             App: collects systems, runs init -> Network.init -> start
+  App.luau             App: collects systems, runs init -> Network.init -> start, player and stop hooks
   Definition.luau      define/use, system ids, dependency graph wiring, lifecycle-stripping type function
   Graph.luau           generic dependency graph with topological sort and cycle detection
   Network/
@@ -317,9 +416,9 @@ pesde.toml             package manifest, scripts, dependencies, version
 
 Tests run outside Roblox under Lune. `test/_run.luau`:
 
-- builds a DataModel with `@lune/roblox` and sets the `game` / `Instance` globals;
-- stubs `RunService` so `IsClient()` and `IsServer()` both return `false` (remotes and the handshake are not exercised end to end);
-- overrides `require` so `@self/` and relative paths resolve from the calling file, and redirects GreenTea to its pesde install path;
+- builds a DataModel with `@lune/roblox` and sets the `game` / `Instance` / `task` globals;
+- stubs `RunService` so `IsClient()` and `IsServer()` both return `false` (remotes, the handshake and the `Players` / `BindToClose` connections are not exercised end to end; tests call `app:_addPlayer` / `app:_removePlayer` with fake players instead);
+- overrides `require` so `@self/` and relative paths resolve from the calling file, and redirects GreenTea to its pesde install path. Lune can't require Instances, so a test sets `_G.instanceModules[moduleScript] = value` and `require(moduleScript)` then returns `value`;
 - calls each test module, then runs [frktest](https://github.com/itsfrank/frktest).
 
 To add a test file: create `test/Thing.luau` that returns a function registering `test.suite(...)` blocks (copy the shape of `test/Graph.luau`), then add `require("./Thing")()` next to the others in `test/_run.luau`. The Network suite resets `Runtime` state in `test.on_suite_enter`; do the same if you touch Runtime.

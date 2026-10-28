@@ -4,6 +4,7 @@ local Network = require("@self/Network")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
+export type AppOptions = App.AppOptions
 export type Lifecycle = Definition.Lifecycle
 export type System<T> = Definition.System<T>
 export type Defined<T> = Definition.Defined<T>
@@ -17,6 +18,8 @@ export type MiddlewareContext = Network.MiddlewareContext
 export type Middleware<T...> = Network.Middleware<T...>
 export type AnyMiddleware = Network.AnyMiddleware
 export type LoggerOptions = Network.LoggerOptions
+export type RateLimitOptions = Network.RateLimitOptions
+export type Namespace = Network.Namespace
 
 return {
 	App = App,
@@ -25,8 +28,12 @@ return {
 	serverEvent = Network.serverEvent,
 	clientFunction = Network.clientFunction,
 	serverFunction = Network.serverFunction,
+	namespace = Network.namespace,
 	useMiddleware = Network.useMiddleware,
 	logger = Network.logger,
+	rateLimit = Network.rateLimit,
+	-- Return this from a middleware to stop the message.
+	DROP = Network.DROP,
 	-- The GreenTea instance Hydrogen validates with, so schemas always match its version.
 	gt = gt,
 }

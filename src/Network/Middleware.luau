@@ -26,13 +26,27 @@ export type LoggerOptions = {
 	output: ((message: string) -> ())?,
 }
 
+export type RateLimitOptions = {
+	-- Messages each player may send per second, per network object.
+	perSecond: number,
+	-- How many can arrive at once before the rate applies. Defaults to perSecond.
+	burst: number?,
+	-- Called for every message that is dropped.
+	onLimit: ((context: Context) -> ())?,
+}
+
+-- Returned by a middleware in place of the values to stop the message: an event is
+-- not delivered, a function call errors.
+local DROP = table.freeze({})
+
 local Middleware = {
 	global = {} :: { AnyMiddleware },
+	DROP = DROP,
 }
 
 local function forward(chain: { AnyMiddleware }, index: number, context: Context, ...: any): ...any
 	local middleware = chain[index]
-	if not middleware then
+	if not middleware or (...) == DROP then
 		return ...
 	end
 
@@ -41,11 +55,24 @@ end
 
 local function backward(chain: { AnyMiddleware }, index: number, context: Context, ...: any): ...any
 	local middleware = chain[index]
-	if not middleware then
+	if not middleware or (...) == DROP then
 		return ...
 	end
 
 	return backward(chain, index - 1, context, middleware(context, ...))
+end
+
+-- Whether the values coming out of Middleware.run were dropped.
+function Middleware.dropped(...: any): boolean
+	return (...) == DROP
+end
+
+-- For function payloads, which can't be skipped silently: errors if dropped, else passes the values on.
+function Middleware.unlessDropped(name: string, payload: "request" | "response", ...: any): ...any
+	if (...) == DROP then
+		error(`[HYDROGEN] {name} {payload} was dropped by middleware`, 0)
+	end
+	return ...
 end
 
 -- Middleware layers like an onion: outgoing runs object middleware then global,
@@ -169,6 +196,54 @@ local function formatPeer(context: Context): string
 	end
 
 	return ""
+end
+
+-- Builds a middleware that drops a player's messages beyond a rate, per network object.
+-- Only incoming events and requests on the server are limited; everything else passes.
+function Middleware.rateLimit(options: RateLimitOptions): AnyMiddleware
+	local perSecond = options.perSecond
+	if type(perSecond) ~= "number" or perSecond <= 0 then
+		error(`[HYDROGEN] rateLimit perSecond must be a positive number`, 2)
+	end
+
+	local burst = math.max(options.burst or perSecond, 1)
+	local onLimit = options.onLimit
+
+	-- Weak so players who left can be collected.
+	local buckets = setmetatable({}, { __mode = "k" }) :: { [Player]: { [string]: { tokens: number, at: number } } }
+
+	return function(context: Context, ...: any): ...any
+		local player = context.player
+		if player == nil or context.direction ~= "incoming" or context.payload == "response" then
+			return ...
+		end
+
+		local now = os.clock()
+		local perPlayer = buckets[player]
+		if not perPlayer then
+			perPlayer = {}
+			buckets[player] = perPlayer
+		end
+
+		local bucket = perPlayer[context.name]
+		if not bucket then
+			bucket = { tokens = burst, at = now }
+			perPlayer[context.name] = bucket
+		end
+
+		bucket.tokens = math.min(burst, bucket.tokens + (now - bucket.at) * perSecond)
+		bucket.at = now
+
+		if bucket.tokens < 1 then
+			if onLimit then
+				onLimit(context)
+			end
+			return DROP
+		end
+
+		bucket.tokens -= 1
+		return ...
+	end
 end
 
 -- Builds a middleware that logs every message passing through it, unchanged.

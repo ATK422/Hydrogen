@@ -5,6 +5,8 @@ local test = frktest.test
 local check = frktest.assert.check
 
 local gt = require("../roblox_packages/.pesde/corecii+greentea/0.4.11/greentea/src/GreenTea")
+local App = require("../src/App")
+local Network = require("../src/Network")
 local ClientEvent = require("../src/Network/ClientEvent")
 local ClientFunction = require("../src/Network/ClientFunction")
 local Middleware = require("../src/Network/Middleware")
@@ -23,6 +25,7 @@ return function()
 		Runtime.RemoteFunction = nil
 		Runtime.UnprocessedNames = {}
 		Runtime.RegisteredNames = {}
+		Runtime.Objects = {}
 		Runtime.NameToIdMap = {}
 		Runtime.IdToNameMap = {}
 		Runtime.EventHandlers = {}
@@ -30,6 +33,8 @@ return function()
 		Runtime.OutgoingQueue = {}
 		Runtime.PlayerQueues = {}
 		Runtime.ReadyPlayers = {}
+		Runtime.Unreliable = {}
+		Runtime.DepartedPlayers = setmetatable({}, { __mode = "k" }) :: any
 		Middleware.global = {}
 	end)
 
@@ -50,13 +55,204 @@ return function()
 			check.equal(Runtime:getNameFromId(zeta), "id-zeta")
 		end)
 
-		test.case("ignores duplicate event names", function()
+		test.case("duplicate names error", function()
 			ClientEvent.new("dup-name", gt.string())
 			local before = #Runtime.UnprocessedNames
 
-			ClientEvent.new("dup-name", gt.number())
+			check.should_error(function()
+				ServerEvent.new("dup-name", gt.number())
+				return nil
+			end)
 
 			check.equal(#Runtime.UnprocessedNames, before)
+			return nil
+		end)
+
+		test.case("namespaces prefix names so they don't clash", function()
+			local lobby = Network.namespace("Lobby")
+			local plain = ClientEvent.new("ns-play", gt.string())
+			local prefixed = lobby.clientEvent("ns-play", gt.string())
+			local nested = lobby.namespace("Queue").serverEvent("ns-play", gt.string())
+			local fn = lobby.serverFunction("ns-ping", gt.number())(gt.number())
+
+			check.equal(plain._name, "ns-play")
+			check.equal(prefixed._name, "Lobby/ns-play")
+			check.equal(nested._name, "Lobby/Queue/ns-play")
+			check.equal(fn._name, "Lobby/ns-ping")
+			check.should_error(function()
+				Network.namespace("")
+				return nil
+			end)
+			return nil
+		end)
+
+		test.case("addNetwork requires a ModuleScript passed directly", function()
+			local module = Instance.new("ModuleScript")
+			local folder = Instance.new("Folder")
+			local child = Instance.new("ModuleScript")
+			child.Parent = folder
+
+			local registered = false
+			_G.instanceModules[module] = { Play = ServerEvent.new("addnetwork-direct", gt.string()) }
+			_G.instanceModules[child] = setmetatable({}, {
+				__index = function()
+					registered = true
+					return nil
+				end,
+			})
+
+			App.new():addNetwork(module, folder)
+
+			check.equal(Runtime.RegisteredNames["addnetwork-direct"], true)
+			check.equal(registered, false)
+			return nil
+		end)
+
+		test.case("handshake reports whether the names match", function()
+			ServerEvent.new("hash-a", gt.string())
+			Runtime:assignIds()
+
+			local hash = Runtime:namesHash()
+			local _, matches = Runtime:markPlayerReady({ Name = "Same" } :: any, hash)
+			check.equal(matches, true)
+
+			local _, mismatched = Runtime:markPlayerReady({ Name = "Other" } :: any, "0:0")
+			check.equal(mismatched, false)
+
+			ServerEvent.new("hash-b", gt.string())
+			Runtime:assignIds()
+			check.not_equal(Runtime:namesHash(), hash)
+			return nil
+		end)
+
+		test.case("unreliable events are never queued", function()
+			ServerEvent.new("unreliable-frame", gt.number()):Unreliable()
+			Runtime:assignIds()
+
+			local wasInitialized = Runtime.Initialized
+			Runtime.Initialized = false
+			Runtime:fireClientEvent("unreliable-frame", { { Parent = game:GetService("Players") } :: any }, 1)
+			check.equal(#Runtime.OutgoingQueue, 0)
+
+			Runtime.Initialized = true
+			local player = { Parent = game:GetService("Players") } :: any
+			Runtime:fireClientEvent("unreliable-frame", { player }, 1)
+			check.equal(Runtime.PlayerQueues[player], nil)
+
+			Runtime.Initialized = wasInitialized
+			return nil
+		end)
+
+		test.case("server functions time out when the client never answers", function()
+			local fn = ServerFunction.new("timeout-ping", gt.number())(gt.number()):SetTimeout(0.05)
+			Runtime:assignIds()
+
+			local wasInitialized = Runtime.Initialized
+			local wasRemote = Runtime.RemoteFunction
+			Runtime.Initialized = true
+
+			local player = { Name = "Silent" } :: any
+			Runtime.RemoteFunction = {
+				InvokeClient = function(_, _, _, value)
+					task.wait(0.2)
+					return value
+				end,
+			} :: any
+			local ok, err = pcall(function()
+				return fn:Fire(player, 1)
+			end)
+			check.equal(ok, false)
+			check.not_nil(string.find(tostring(err), "timed out", 1, true))
+
+			Runtime.RemoteFunction = {
+				InvokeClient = function(_, _, _, value)
+					task.wait()
+					return value + 1
+				end,
+			} :: any
+			check.equal(fn:Fire(player, 1), 2)
+
+			Runtime.RemoteFunction = {
+				InvokeClient = function(_, _, _, value)
+					return value + 2
+				end,
+			} :: any
+			check.equal(fn:Fire(player, 1), 3)
+
+			Runtime.Initialized = wasInitialized
+			Runtime.RemoteFunction = wasRemote
+			return nil
+		end)
+
+		test.case("middleware returning DROP stops events and fails functions", function()
+			local event = ClientEvent.new("drop-event", gt.string())
+			local called = false
+			event:On(function()
+				called = true
+			end)
+			event:Use(function(context, ...)
+				if context.direction == "incoming" then
+					return Middleware.DROP
+				end
+				return ...
+			end)
+
+			local fn = ClientFunction.new("drop-fn", gt.args(gt.number()), gt.returns(gt.number()))
+			fn:On(function(_, value)
+				return value
+			end)
+			fn:UseRequest(function()
+				return Middleware.DROP
+			end)
+
+			Runtime:assignIds()
+			Runtime:handleEvent(Runtime:getNetworkId("drop-event"), { Name = "Tester" }, "hi")
+			check.equal(called, false)
+
+			check.should_error(function()
+				Runtime:handleFunction(Runtime:getNetworkId("drop-fn"), { Name = "Tester" }, 1)
+				return nil
+			end)
+			return nil
+		end)
+
+		test.case("rateLimit drops a player's messages beyond the burst", function()
+			local limited = 0
+			local limit = Middleware.rateLimit({
+				perSecond = 1,
+				burst = 2,
+				onLimit = function()
+					limited += 1
+				end,
+			})
+
+			local player = {} :: any
+			local other = {} :: any
+			local incoming = { name = "Spam", kind = "ClientEvent", direction = "incoming", payload = "event", player = player } :: any
+			local fromOther = { name = "Spam", kind = "ClientEvent", direction = "incoming", payload = "event", player = other } :: any
+			local outgoing = { name = "Spam", kind = "ServerEvent", direction = "outgoing", payload = "event" } :: any
+
+			check.equal(limit(incoming, "a"), "a")
+			check.equal(limit(incoming, "b"), "b")
+			check.equal(limit(incoming, "c"), Middleware.DROP)
+			check.equal(limit(fromOther, "d"), "d")
+			check.equal(limit(outgoing, "e"), "e")
+			check.equal(limited, 1)
+			check.should_error(function()
+				Middleware.rateLimit({ perSecond = 0 })
+				return nil
+			end)
+			return nil
+		end)
+
+		test.case("countObjects finds network objects in module results", function()
+			local event = ServerEvent.new("count-a", gt.string())
+			local fn = ClientFunction.new("count-b", gt.args(gt.number()), gt.returns(gt.number()))
+
+			check.equal(Network.countObjects(event), 1)
+			check.equal(Network.countObjects({ A = event, Nested = { B = fn } }), 2)
+			check.equal(Network.countObjects({ helper = function() end }), 0)
+			check.equal(Network.countObjects(nil), 0)
 			return nil
 		end)
 
@@ -143,11 +339,34 @@ return function()
 			local wasInitialized = Runtime.Initialized
 			Runtime.Initialized = true
 
-			local player = {} :: Player
+			local player = { Parent = game:GetService("Players") } :: any
 			Runtime:fireClientEvent("queue-unready", { player }, "payload")
 
 			check.equal(#Runtime.PlayerQueues[player], 1)
 			check.equal(Runtime.PlayerQueues[player][1].args[1], "payload")
+
+			Runtime.Initialized = wasInitialized
+			return nil
+		end)
+
+		test.case("drops events for players who have left", function()
+			ServerEvent.new("queue-departed", gt.string())
+			Runtime:assignIds()
+
+			local wasInitialized = Runtime.Initialized
+			Runtime.Initialized = true
+
+			-- Removed by PlayerRemoving but still parented while other handlers run.
+			local leaving = { Parent = game:GetService("Players") } :: any
+			Runtime:fireClientEvent("queue-departed", { leaving }, "before")
+			Runtime:removePlayer(leaving)
+			Runtime:fireClientEvent("queue-departed", { leaving }, "after")
+
+			local gone = { Parent = nil } :: any
+			Runtime:fireClientEvent("queue-departed", { gone }, "payload")
+
+			check.equal(Runtime.PlayerQueues[leaving], nil)
+			check.equal(Runtime.PlayerQueues[gone], nil)
 
 			Runtime.Initialized = wasInitialized
 			return nil

@@ -9,6 +9,7 @@ export type ServerEvent<T...> = Runtime.InnerNetworkInfo<T...> & {
     FireAll: (self: ServerEvent<T...>, T...) -> (),
     FireExcept: (self: ServerEvent<T...>, player: Player | { Player }, T...) -> (),
     Use: (self: ServerEvent<T...>, middleware: Middleware.Middleware<T...>) -> () -> (),
+    Unreliable: (self: ServerEvent<T...>) -> ServerEvent<T...>,
 }
 
 local function toPlayers(player: Player | { Player }): { Player }
@@ -29,11 +30,22 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
     event._listeners = {}
     event._schema = gt.build(...)
 
+    local function forward(players: { Player }, ...: any)
+        if Middleware.dropped(...) then
+            return
+        end
+        Runtime:fireClientEvent(name, players, ...)
+    end
+
     local function send(players: { Player }, ...: any)
-        Runtime:fireClientEvent(name, players, Middleware.run(event._middleware, "ServerEvent", name, "outgoing", "event", nil, players, ...))
+        forward(players, Middleware.run(event._middleware, "ServerEvent", name, "outgoing", "event", nil, players, ...))
     end
 
     local function deliver(...: any)
+        if Middleware.dropped(...) then
+            return
+        end
+
         local ok, cause = event._schema:matches(...)
         if not ok then
             warn(`[HYDROGEN] Dropped invalid {name} from server: {cause:formatErr()}`)
@@ -78,11 +90,18 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
         send(players, ...)
     end
 
+    -- Sends over an UnreliableRemoteEvent: may be dropped or arrive out of order, and is
+    -- never queued. For data the next message replaces, such as per-frame state.
+    function event:Unreliable(): ServerEvent<T...>
+        Runtime.Unreliable[name] = true
+        return self
+    end
+
     function event:Use(middleware: Middleware.Middleware<T...>): () -> ()
         return Middleware.add(self._middleware, middleware)
     end
 
-    Runtime:registerNetworkObject(name)
+    Runtime:registerNetworkObject(name, event)
     Runtime:registerEventHandler(name, function(...)
         deliver(Middleware.run(event._middleware, "ServerEvent", name, "incoming", "event", nil, nil, ...))
     end)

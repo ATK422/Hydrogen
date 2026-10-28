@@ -66,6 +66,23 @@ return function()
 			end)
 		end)
 
+		test.case("names nodes with the label in cycle errors", function()
+			local graph = Graph.new(function(node: { id: string })
+				return `Common.{node.id}`
+			end)
+			local a = { id = "a" }
+			local b = { id = "b" }
+
+			graph:link(a, b)
+			graph:link(b, a)
+
+			local ok, err = pcall(function()
+				graph:sort({ a, b })
+			end)
+			check.equal(ok, false)
+			check.not_nil(string.find(tostring(err), "Common.a -> Common.b -> Common.a", 1, true))
+		end)
+
 		test.case("only sorts nodes included in the request", function()
 			local graph = Graph.new()
 			local a = { id = "a" }

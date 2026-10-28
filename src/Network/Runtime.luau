@@ -38,9 +38,13 @@ export type QueuedClientEvent = {
 local Runtime = {
     Initialized = false,
     RemoteEvent = nil :: RemoteEvent?,
+    UnreliableRemoteEvent = nil :: UnreliableRemoteEvent?,
     RemoteFunction = nil :: RemoteFunction?,
+    -- Events whose sender uses the UnreliableRemoteEvent; receivers listen on both.
+    Unreliable = {} :: {[string]: boolean},
     UnprocessedNames = {} :: {[number]: string},
     RegisteredNames = {} :: {[string]: boolean},
+    Objects = {} :: {[any]: string},
     NameToIdMap = {} :: {[string]: number},
     IdToNameMap = {} :: {[number]: string},
     EventHandlers = {} :: {[string]: (...any) -> ()},
@@ -48,6 +52,8 @@ local Runtime = {
     OutgoingQueue = {} :: { OutgoingEvent },
     PlayerQueues = {} :: { [Player]: { QueuedClientEvent } },
     ReadyPlayers = {} :: { [Player]: boolean },
+    -- Weak so players who left can still be garbage collected.
+    DepartedPlayers = setmetatable({}, { __mode = "k" }) :: { [Player]: boolean },
 }
 
 local function unpackArgs(args: PackedArgs): ...any
@@ -55,8 +61,8 @@ local function unpackArgs(args: PackedArgs): ...any
 end
 
 -- when writing the docs, ensure you say that this can yield on the client
-function getNetworkObjectOfType(networkType: "RemoteEvent" | "RemoteFunction"): RemoteEvent | RemoteFunction
-    local event = (Runtime[networkType] or ReplicatedStorage:FindFirstChild(`HydrogenNetwork{networkType}`)) :: RemoteEvent | RemoteFunction | nil
+function getNetworkObjectOfType(networkType: "RemoteEvent" | "UnreliableRemoteEvent" | "RemoteFunction"): Instance
+    local event = (Runtime[networkType] or ReplicatedStorage:FindFirstChild(`HydrogenNetwork{networkType}`)) :: Instance?
 
     if not event and RunService:IsClient() then
         local s, _ = pcall(function()
@@ -75,7 +81,7 @@ function getNetworkObjectOfType(networkType: "RemoteEvent" | "RemoteFunction"): 
     end
 
     --Event must exist so this is safe
-    return (event :: any) :: RemoteEvent | RemoteFunction
+    return event :: any
 end
 
 -- when writing the docs, ensure you say that this can yield on the client (remotes + ready handshake)
@@ -86,11 +92,16 @@ function Runtime:init()
     end
 
     Runtime.RemoteEvent = getNetworkObjectOfType("RemoteEvent") :: RemoteEvent
+    Runtime.UnreliableRemoteEvent = getNetworkObjectOfType("UnreliableRemoteEvent") :: UnreliableRemoteEvent
     Runtime.RemoteFunction = getNetworkObjectOfType("RemoteFunction") :: RemoteFunction
     Runtime:assignIds()
 
     if RunService:IsClient() then
         (Runtime.RemoteEvent :: RemoteEvent).OnClientEvent:Connect(function(id, ...)
+            Runtime:handleEvent(id, ...)
+        end);
+
+        (Runtime.UnreliableRemoteEvent :: UnreliableRemoteEvent).OnClientEvent:Connect(function(id, ...)
             Runtime:handleEvent(id, ...)
         end);
 
@@ -104,17 +115,20 @@ function Runtime:init()
             Runtime:handleEvent(id :: number, player, ...)
         end);
 
+        (Runtime.UnreliableRemoteEvent :: UnreliableRemoteEvent).OnServerEvent:Connect(function(player, id, ...)
+            Runtime:handleEvent(id :: number, player, ...)
+        end);
+
         (Runtime.RemoteFunction :: RemoteFunction).OnServerInvoke = function(player, id, ...)
             if id == PROTOCOL_READY then
-                return Runtime:markPlayerReady(player)
+                return Runtime:markPlayerReady(player, ...)
             end
 
             return Runtime:handleFunction(id, player, ...)
         end
 
         Players.PlayerRemoving:Connect(function(player)
-            Runtime.ReadyPlayers[player] = nil
-            Runtime.PlayerQueues[player] = nil
+            Runtime:removePlayer(player)
         end)
     end
 
@@ -135,19 +149,43 @@ function Runtime:registerEventHandler(name: string, handler: (...any) -> ())
     Runtime.EventHandlers[name] = handler
 end
 
-function Runtime:registerNetworkObject(event: string)
+function Runtime:registerNetworkObject(event: string, object: any)
     if Runtime.Initialized then
         warn(`[HYDROGEN] Network already initialized ignoring {event} registration`)
         return
     end
 
+    -- Keeping the first object would leave the second module silently talking to the wrong one.
     if Runtime.RegisteredNames[event] then
-        warn(`[HYDROGEN] Network object {event} already registered, ignoring registration`)
-        return
+        error(`[HYDROGEN] Network object {event} is already registered; names must be unique (use Hydrogen.namespace to separate places)`, 3)
     end
 
     Runtime.RegisteredNames[event] = true
+    Runtime.Objects[object] = event
     table.insert(Runtime.UnprocessedNames, event)
+end
+
+-- Counts the registered network objects reachable from a module's return value.
+function Runtime:countObjects(value: any, seen: { [any]: boolean }?): number
+    if type(value) ~= "table" then
+        return 0
+    end
+
+    if Runtime.Objects[value] then
+        return 1
+    end
+
+    local visited = seen or {}
+    if visited[value] then
+        return 0
+    end
+    visited[value] = true
+
+    local count = 0
+    for _, child in value do
+        count += Runtime:countObjects(child, visited)
+    end
+    return count
 end
 
 -- nil until assignIds has run for this name.
@@ -195,6 +233,17 @@ function Runtime:flushOutgoingQueue()
     end
 end
 
+-- A player who has left (or is leaving) gets nothing; a queue made for them would never be cleared.
+function Runtime:isDeparted(player: Player): boolean
+    return Runtime.DepartedPlayers[player] == true or player.Parent == nil
+end
+
+function Runtime:removePlayer(player: Player)
+    Runtime.DepartedPlayers[player] = true
+    Runtime.ReadyPlayers[player] = nil
+    Runtime.PlayerQueues[player] = nil
+end
+
 function Runtime:queueForPlayer(player: Player, id: number, args: PackedArgs)
     local queue = Runtime.PlayerQueues[player]
     if not queue then
@@ -208,15 +257,40 @@ function Runtime:queueForPlayer(player: Player, id: number, args: PackedArgs)
     })
 end
 
-function Runtime:markPlayerReady(player: Player): { QueuedClientEvent }
+-- A fingerprint of the registered names in id order. Ids come from sorting names, so if the
+-- two sides' fingerprints differ, a name exists on one side only and later ids are shifted.
+function Runtime:namesHash(): string
+    local hash = 5381
+    for id = 1, #Runtime.IdToNameMap do
+        local name = Runtime.IdToNameMap[id]
+        for index = 1, #name do
+            hash = (hash * 33 + string.byte(name, index)) % 4294967296
+        end
+        -- Separator, so "ab","c" and "a","bc" differ.
+        hash = (hash * 33) % 4294967296
+    end
+
+    return `{#Runtime.IdToNameMap}:{hash}`
+end
+
+-- Returns the events queued for the player, and whether the client's names matched the server's.
+function Runtime:markPlayerReady(player: Player, clientHash: unknown?): ({ QueuedClientEvent }, boolean)
+    local serverHash = Runtime:namesHash()
+    local matches = clientHash == nil or clientHash == serverHash
+
+    -- Only the first handshake counts, so a client repeating it can't flood the log.
     if Runtime.ReadyPlayers[player] then
-        return {}
+        return {}, matches
+    end
+
+    if not matches then
+        warn(`[HYDROGEN] NETWORK MISMATCH with {player.Name}: the client registered different network names than the server (client {string.sub(tostring(clientHash), 1, 32)}, server {serverHash}). Ids come from sorted names, so a name on one side only sends messages to the wrong objects. Register the same modules with addNetwork on both sides.`)
     end
 
     Runtime.ReadyPlayers[player] = true
     local queue = Runtime.PlayerQueues[player]
     Runtime.PlayerQueues[player] = nil
-    return queue or {}
+    return queue or {}, matches
 end
 
 -- Client asks the server for every event queued before this runtime started.
@@ -230,7 +304,10 @@ function Runtime:requestReady()
         error(`[HYDROGEN] Network object RemoteFunction not found`)
     end
 
-    local batch = remote:InvokeServer(PROTOCOL_READY) :: { QueuedClientEvent }?
+    local batch, matches = remote:InvokeServer(PROTOCOL_READY, Runtime:namesHash())
+    if matches == false then
+        warn(`[HYDROGEN] NETWORK MISMATCH: this client registered different network names than the server ({Runtime:namesHash()} here). Messages will reach the wrong objects. Register the same modules with addNetwork on both sides.`)
+    end
     if not batch then
         return
     end
@@ -242,8 +319,13 @@ end
 
 function Runtime:fireClientEvent(name: string, players: { Player }, ...: any)
     local args = table.pack(...) :: PackedArgs
+    local unreliable = Runtime.Unreliable[name] == true
 
+    -- Unreliable events are never queued: a backlog of stale frames is worse than none.
     if not Runtime.Initialized then
+        if unreliable then
+            return
+        end
         table.insert(Runtime.OutgoingQueue, {
             name = name,
             players = players,
@@ -258,14 +340,25 @@ function Runtime:fireClientEvent(name: string, players: { Player }, ...: any)
     end
 
     for _, player in players do
-        if Runtime.ReadyPlayers[player] then
-            local remote = Runtime.RemoteEvent
-            if not remote then
-                error(`[HYDROGEN] Network object RemoteEvent not found`)
-            end
+        if Runtime:isDeparted(player) then
+            continue
+        elseif Runtime.ReadyPlayers[player] then
+            if unreliable then
+                local remote = Runtime.UnreliableRemoteEvent
+                if not remote then
+                    error(`[HYDROGEN] Network object UnreliableRemoteEvent not found`)
+                end
 
-            remote:FireClient(player, id, unpackArgs(args))
-        else
+                remote:FireClient(player, id, unpackArgs(args))
+            else
+                local remote = Runtime.RemoteEvent
+                if not remote then
+                    error(`[HYDROGEN] Network object RemoteEvent not found`)
+                end
+
+                remote:FireClient(player, id, unpackArgs(args))
+            end
+        elseif not unreliable then
             Runtime:queueForPlayer(player, id, args)
         end
     end
@@ -273,8 +366,12 @@ end
 
 function Runtime:fireServerEvent(name: string, ...: any)
     local args = table.pack(...) :: PackedArgs
+    local unreliable = Runtime.Unreliable[name] == true
 
     if not Runtime.Initialized then
+        if unreliable then
+            return
+        end
         table.insert(Runtime.OutgoingQueue, {
             name = name,
             args = args,
@@ -287,6 +384,16 @@ function Runtime:fireServerEvent(name: string, ...: any)
         error(`[HYDROGEN] Network event {name} not found`)
     end
 
+    if unreliable then
+        local remote = Runtime.UnreliableRemoteEvent
+        if not remote then
+            error(`[HYDROGEN] Network object UnreliableRemoteEvent not found`)
+        end
+
+        remote:FireServer(id, unpackArgs(args))
+        return
+    end
+
     local remote = Runtime.RemoteEvent
     if not remote then
         error(`[HYDROGEN] Network object RemoteEvent not found`)
@@ -295,8 +402,10 @@ function Runtime:fireServerEvent(name: string, ...: any)
     remote:FireServer(id, unpackArgs(args))
 end
 
---For safety, you can only fire to one client at a time
-function Runtime:fireClientFunction(name: string, player: Player, ...: any): any
+--For safety, you can only fire to one client at a time.
+-- InvokeClient waits for the client forever, and a client can simply never answer,
+-- so a finite timeout errors in the caller instead of leaving its thread hanging.
+function Runtime:fireClientFunction(name: string, player: Player, timeout: number, ...: any): ...any
     local id = Runtime:getFunctionId(name)
 
     local networkObject = getNetworkObjectOfType("RemoteFunction")
@@ -305,7 +414,44 @@ function Runtime:fireClientFunction(name: string, player: Player, ...: any): any
     end
 
     local remote = networkObject :: RemoteFunction
-    return remote:InvokeClient(player, id, ...)
+    if timeout == math.huge then
+        return remote:InvokeClient(player, id, ...)
+    end
+
+    local caller = coroutine.running()
+    local args = table.pack(...) :: PackedArgs
+    local result: { [number]: any, n: number }? = nil
+    local waiting = false
+
+    local function finish(packed: { [number]: any, n: number })
+        if result then
+            return
+        end
+        result = packed
+        if waiting then
+            task.spawn(caller)
+        end
+    end
+
+    task.spawn(function()
+        finish(table.pack(pcall(remote.InvokeClient, remote, player, id, unpackArgs(args))))
+    end)
+
+    -- InvokeClient can fail without yielding (e.g. the player already left).
+    if not result then
+        local timer = task.delay(timeout, finish, table.pack(false, `[HYDROGEN] Network function {name} timed out after {timeout}s waiting for {player.Name}`))
+        waiting = true
+        coroutine.yield()
+        if coroutine.status(timer) == "suspended" then
+            task.cancel(timer)
+        end
+    end
+
+    local packed = result :: { [number]: any, n: number }
+    if not packed[1] then
+        error(packed[2], 0)
+    end
+    return table.unpack(packed, 2, packed.n)
 end
 
 function Runtime:fireServerFunction(name: string, ...: any): any

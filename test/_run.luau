@@ -4,6 +4,7 @@ local roblox = require("@lune/roblox")
 
 local dataModel = roblox.Instance.new("DataModel")
 Instance = roblox.Instance
+task = require("@lune/task")
 
 for _, className in { "ReplicatedStorage", "Players", "RunService" } do
 	pcall(function()
@@ -108,7 +109,15 @@ local function callerRoot(caller: string): string
 	return dirname(caller)
 end
 
-require = function(path: string)
+-- Lune can't require Instances, so tests register what each ModuleScript returns.
+local instanceModules: { [any]: any } = {}
+_G.instanceModules = instanceModules
+
+require = function(path: any)
+	if typeof(path) == "Instance" then
+		return instanceModules[path]
+	end
+
 	if path == "@pkg/gt" or string.match(path, "roblox_packages/gt$") then
 		return oldRequire("../roblox_packages/.pesde/corecii+greentea/0.4.11/greentea/src/GreenTea")
 	end

@@ -25,18 +25,18 @@ function ClientFunction.new<A..., R...>(name: string, args: (A...) -> (), return
 
     -- Runs on the server.
     local function respond(player: Player, ...: any): ...any
-        return Middleware.run(
+        return Middleware.unlessDropped(name, "response", Middleware.run(
             fn._responseMiddleware,
             "ClientFunction", name, "outgoing", "response", player, nil,
             fn._returnsSchema:assert((fn._callback :: any)(player, fn._argsSchema:assert(...)))
-        )
+        ))
     end
 
     function fn:On(callback: (Player, A...) -> R...): () -> ()
         self._callback = callback
 
         Runtime:registerFunctionCallback(self._name, function(player: Player, ...)
-            return respond(player, Middleware.run(self._requestMiddleware, "ClientFunction", name, "incoming", "request", player, nil, ...))
+            return respond(player, Middleware.unlessDropped(name, "request", Middleware.run(self._requestMiddleware, "ClientFunction", name, "incoming", "request", player, nil, ...)))
         end)
 
         return function()
@@ -51,14 +51,14 @@ function ClientFunction.new<A..., R...>(name: string, args: (A...) -> (), return
     function fn:Fire(...: A...): R...
         self._argsSchema:assert(...)
 
-        return self._returnsSchema:assert(Middleware.run(
+        return self._returnsSchema:assert(Middleware.unlessDropped(name, "response", Middleware.run(
             self._responseMiddleware,
             "ClientFunction", name, "incoming", "response", nil, nil,
             Runtime:fireServerFunction(
                 self._name,
-                Middleware.run(self._requestMiddleware, "ClientFunction", name, "outgoing", "request", nil, nil, ...)
+                Middleware.unlessDropped(name, "request", Middleware.run(self._requestMiddleware, "ClientFunction", name, "outgoing", "request", nil, nil, ...))
             )
-        ))
+        )))
     end
 
     function fn:UseRequest(middleware: Middleware.Middleware<A...>): () -> ()
@@ -69,7 +69,7 @@ function ClientFunction.new<A..., R...>(name: string, args: (A...) -> (), return
         return Middleware.add(self._responseMiddleware, middleware)
     end
 
-    Runtime:registerNetworkObject(name)
+    Runtime:registerNetworkObject(name, fn)
 
     return fn
 end
