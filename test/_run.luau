@@ -4,6 +4,8 @@ local roblox = require("@lune/roblox")
 
 local dataModel = roblox.Instance.new("DataModel")
 Instance = roblox.Instance
+Vector3 = roblox.Vector3
+CFrame = roblox.CFrame
 task = require("@lune/task")
 
 for _, className in { "ReplicatedStorage", "Players", "RunService" } do
@@ -144,6 +146,6 @@ local console_reporter = frktest.reporters.console_reporter
 
 console_reporter.init()
 
-if not frktest.run() then
-	process.exit(1)
-end
+-- Exit explicitly: the function timeout tests yield the main thread and get it resumed from
+-- task threads, after which Lune can keep waiting once the last test has finished.
+process.exit(if frktest.run() then 0 else 1)

@@ -307,6 +307,69 @@ Options:
 
 It only limits what the server receives from clients (incoming events and function requests). Responses and everything on the client pass through. A limited function request errors back to the client.
 
+### Batching and buffer encoding
+
+Both are off by default, and the plain path above doesn't change. Turn them on when frequent traffic, such as a per-tick frame event, shows up in the network stats. Batching removes the per-call overhead Roblox adds to every remote call. Encoding shrinks each payload. In both cases GreenTea still validates what arrives, and middleware still sees plain values.
+
+#### Batching
+
+```luau
+local app = Hydrogen.App.new({ batching = true })
+```
+
+With batching on, `Fire` doesn't send right away. Hydrogen collects events per target (each player on the server, the server on the client) and sends them on `Heartbeat`, one remote call per target per frame. The receiver unpacks the call and runs the events in the order they were fired. Each event runs in its own thread, as separate remote calls would, so a listener that yields or errors doesn't hold up the rest.
+
+- Reliable and unreliable events batch separately. Roblox limits an `UnreliableRemoteEvent` message to about 900 bytes, so an unreliable batch is split to stay under an estimated 900 bytes. An unreliable event too big to share a call is sent on its own, as it would be without batching.
+- Calling a function sends the events already waiting for that target first, so they arrive before the call.
+- Queuing doesn't change. Events fired before the network starts are queued, events for a player whose client hasn't started are held until its handshake, and sends to players who left are dropped. That includes a player who left between `Fire` and the flush.
+- Only the sender's setting matters, because receivers always understand batches. Still, turn it on for both apps so both directions batch.
+
+Trade-offs: every event waits until the end of the frame, which adds up to one frame of latency. A batch is unpacked into one thread per event on the receiving side, the same count as unbatched. And a frame with one event to a target gains nothing: that event is sent as itself.
+
+Why an `App.new` option: batching changes how the whole network runtime sends, and that runtime is shared by everything on one side (see [Booting the app](#booting-the-app)). It has to be decided once, before the network starts, like `debug`. A per-event switch would let events fired in the same frame arrive in a different order than they were fired.
+
+#### Buffer encoding
+
+```luau
+local Unit = gt.table({
+	id = gt.number({ integer = true, range = "[0, 65535]" }),
+	position = gt.Vector3(),
+	hp = gt.number({ integer = true, range = "[0, 255]" }),
+})
+
+BattleFrame = Hydrogen.serverEvent("BattleFrame", gt.array(Unit)):Unreliable():Encode(),
+```
+
+`:Encode()` works on all four kinds (`clientEvent`, `serverEvent`, `clientFunction`, `serverFunction`; for functions it covers the arguments and the return values). The payload is packed into a `buffer` laid out by the schema:
+
+| Schema | Packed as |
+| --- | --- |
+| `gt.number()` | 8-byte float |
+| `gt.number({ integer = true, range = ... })` | the smallest of 1, 2 or 4 bytes that holds the whole range, else 8 |
+| `gt.string()`, `gt.buffer()` | length (1 byte below 128) + bytes |
+| `gt.boolean()` | 1 byte |
+| `gt.Vector3()` | 12 bytes |
+| `gt.CFrame()` | 48 bytes, lossless |
+| `gt.array(T)` | count + items |
+| `gt.table({ ... })` | the fields in key order, without the names |
+| `gt.dictionary(K, V)` | count + keys and values |
+| `gt.optional(T)` | 1 byte + `T` when present |
+| `gt.literal(value)` | nothing |
+| several values, `gt.vararg(T)` | each in order (varargs with a count) |
+
+Anything else is sent as a plain Luau value beside the buffer, so every schema can be encoded; those values just don't shrink. That covers unions, `gt.any()`, Instances, EnumItems, `Color3` and tables with both fields and an indexer.
+
+- Validation doesn't change. The receiver decodes, runs incoming middleware, then checks the schema. A message that can't be decoded is dropped with `[HYDROGEN] Dropped undecodable <name>`; for a function, the call errors.
+- Middleware, including the logger, sees plain values on both sides. Encoding happens after outgoing middleware and decoding before incoming middleware.
+- Both sides must call `:Encode()`, so put it in the shared definition. A side that doesn't will reject the other side's messages.
+- Encoded tables carry only the keys the schema declares. GreenTea tables accept extra keys, so an extra key gets through unencoded but is lost when encoded.
+- A sized integer outside its range errors when encoding. That can only happen if outgoing middleware changes a value after it was validated.
+- Encoding and decoding run in Luau on every message, so they cost more CPU than handing values to the remote. They pay off for large or frequent payloads (arrays of numbers, vectors and CFrames) and do little for an occasional short string.
+
+Why a method on the object: the wire format is part of the definition, both sides need the same one, and the shared definition is where both sides already agree. It also chains like `:Unreliable()`, so you encode the hot events and leave the rest alone.
+
+Compared with Blink or Zap, which generate code ahead of time, Hydrogen packs at runtime from the schema. Each event in a batch carries its own buffer, and ids and counts travel as plain numbers. Expect most of the size savings, not all of them.
+
 ### Booting the app
 
 Run one app on the server and one on each client. **Hydrogen supports one app per side.** The dependency graph and the network runtime are shared by the whole Luau VM, so a second app on the same side shares them instead of getting its own.
@@ -333,7 +396,7 @@ app:start()
 
 App methods:
 
-- `App.new(options?)`: a fresh app with its own system list. `options.debug = true` prints how long the boot took and how long each system's `init` and `start` took, slowest first. `options.output` changes where that goes (defaults to `print`).
+- `App.new(options?)`: a fresh app with its own system list. `options.debug = true` prints how long the boot took and how long each system's `init` and `start` took, slowest first. `options.output` changes where that goes (defaults to `print`). `options.batching = true` sends each frame's events as one remote call per target (see [Batching](#batching)).
 - `app:addSystem(system)` / `app:addSystems({ ... })`: add systems directly.
 - `app:addSystemsFolders(a, b, ...)`: require every ModuleScript in each instance and add the ones that are systems. An instance that is itself a ModuleScript is required too. Non-systems are skipped with a warning, and an instance with no systems at all warns.
 - `app:addNetwork(a, b, ...)`: require every ModuleScript in each instance (again including the instance itself if it is a ModuleScript) so their network objects get registered. If the modules' return values hold no network objects, it warns `[HYDROGEN] addNetwork found no network objects in <name>`; that usually means the wrong instance was passed.
@@ -365,6 +428,7 @@ What `app:start()` does, in order:
 - **Functions are not queued.** Only call `clientFunction:Fire` / `serverFunction:Fire` from `start` or later; calling one earlier errors with `called before the network started`.
 - `serverFunction:Fire` invokes a single client and yields until it answers or the timeout (10 seconds by default) runs out.
 - Middleware added after a message is queued does not run on it; add middleware before firing anything.
+- With batching on, events go out on `Heartbeat`, at the end of the frame they were fired in. A function call first sends the events already waiting for its target.
 
 ---
 
@@ -390,7 +454,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 55 | Passed: 55` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 71 | Passed: 71` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -402,8 +466,9 @@ src/
   Graph.luau           generic dependency graph with topological sort and cycle detection
   Network/
     init.luau          exports constructors and Network.init
-    Runtime.luau       remotes, name->id mapping, queues, ready handshake, dispatch
+    Runtime.luau       remotes, name->id mapping, queues, batching, ready handshake, dispatch
     Middleware.luau    middleware context/types, onion ordering, global middleware, logger
+    Codec.luau         schema-driven buffer encoding for :Encode()
     ClientEvent.luau   ServerEvent.luau  ClientFunction.luau  ServerFunction.luau
 test/
   _run.luau            Lune entry point: mocks Roblox globals, patches require, runs suites

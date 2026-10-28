@@ -73,8 +73,8 @@ function Network.countObjects(value: any): number
     return Runtime:countObjects(value)
 end
 
-function Network.init()
-    Runtime:init()
+function Network.init(options: Runtime.InitOptions?)
+    Runtime:init(options)
 end
 
 return Network

@@ -17,6 +17,8 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - `event:Unreliable()` on server and client events, which sends over an `UnreliableRemoteEvent`. Unreliable events are never queued.
 - `Hydrogen.define(id, constructor)`, for an explicit id instead of the calling module's name.
 - `App.new({ debug = true })` prints how long each system's `init` and `start` took. `output` changes where it goes.
+- `App.new({ batching = true })`: events fired during a frame are collected per target and sent on `Heartbeat` as one remote call per target. They are dispatched in order on the receiving side. Reliable and unreliable events batch separately, and unreliable batches are split to stay under an estimated 900 bytes. Calling a function sends that target's pending events first. Off by default.
+- `:Encode()` on all four network object kinds: payloads are packed into a `buffer` using the GreenTea schema (numbers, with 1, 2 or 4-byte integers when an integer range allows it; strings; booleans; `Vector3`; `CFrame`; buffers; arrays; tables; dictionaries; optionals; literals; tuples and varargs). Types it can't pack travel as plain values beside the buffer. Validation still runs on the decoded values, and middleware sees plain values. Off by default.
 
 ### Changed
 
@@ -28,6 +30,8 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - An error in a system's `init` or `start` is reported as `[HYDROGEN] System <name> failed in <hook>: ...` with the traceback. Boot still stops at the first error.
 - The server also creates `ReplicatedStorage.HydrogenNetworkUnreliableRemoteEvent`, and the ready handshake now carries the names fingerprint. Server and client must run the same Hydrogen version.
 - The README states that Hydrogen supports one app per side.
+- Network id `0` on the event remotes now marks a batch, so a receiver understands batches whether or not its own app batches.
+- The Lune test runner exits explicitly when the suite finishes.
 
 ### Fixed
 
