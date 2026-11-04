@@ -98,6 +98,10 @@ local function equal(expected: any, actual: any, isPlayer: (any) -> boolean, see
 	if expected == ANY or rawequal(expected, actual) then
 		return true
 	end
+	-- Values such as Vector3 and CFrame are userdata compared by value (__eq), not by reference.
+	if type(expected) == "userdata" and typeof(expected) == typeof(actual) and expected == actual then
+		return true
+	end
 	if type(expected) ~= "table" or type(actual) ~= "table" or isPlayer(expected) or isPlayer(actual) then
 		-- NaN never equals itself, but an expected NaN should match a NaN.
 		return expected ~= expected and actual ~= actual

@@ -10,6 +10,7 @@ local RunService = game:GetService("RunService")
 local Clock = require("../Clock")
 local Log = require("../Log")
 local Network = require("../Network")
+local Roles = require("../Guards/Roles")
 local Args = require("./Args")
 local Types = require("./Types")
 local Wire = require("./Wire")
@@ -56,6 +57,7 @@ local running = false
 local players: { Player } = {}
 local buckets: { [Player]: { tokens: number, at: number, warned: boolean } } = {}
 local refreshTimer: thread? = nil
+local stopRoleWatch: (() -> ())? = nil
 
 local function trim(text: string): string
 	return (string.match(text, "^%s*(.-)%s*$") :: string)
@@ -217,11 +219,22 @@ local function find(word: string): Command?
 	return lookup[word] or builtinLookup[word]
 end
 
--- The default resolver: listed admins, and everyone in Studio. Never test players, so a test
--- gets the same answer in Studio and under Lune.
-local function defaultResolver(player: Player, _permission: string, _command: string): boolean
+-- The default resolver: listed admins, then Hydrogen.Guards when the game defined a permission or
+-- role with that name, then everyone in Studio. Never test players in Studio, so a test gets the
+-- same answer in Studio and under Lune. Guards caches per player, so only a player's first check
+-- of a role can yield (a group rank, a game pass).
+local function defaultResolver(player: Player, permission: string, _command: string): boolean
 	if admins[player.UserId] then
 		return true
+	end
+	if Roles.permissionExists(permission) then
+		if Roles.can(player, permission) then
+			return true
+		end
+	elseif Roles.exists(permission) then
+		if Roles.has(player, permission) then
+			return true
+		end
 	end
 	return options.studio ~= false and RunService:IsStudio() and Network.activeLoopback() == nil
 end
@@ -621,6 +634,14 @@ function Server.start()
 	running = true
 	table.clear(players)
 	table.clear(buckets)
+	-- Guards role changes (Guards.invalidate, a role defined or removed) change who may run what.
+	stopRoleWatch = Roles.onInvalidate(function(player: Player?)
+		if player then
+			Server.refresh(player)
+		else
+			scheduleRefresh()
+		end
+	end)
 end
 
 function Server.playerAdded(player: Player)
@@ -642,6 +663,10 @@ function Server.stop()
 	running = false
 	table.clear(players)
 	table.clear(buckets)
+	if stopRoleWatch then
+		stopRoleWatch()
+		stopRoleWatch = nil
+	end
 	if refreshTimer then
 		Clock.cancel(refreshTimer)
 		refreshTimer = nil

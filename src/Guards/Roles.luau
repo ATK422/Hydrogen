@@ -34,6 +34,8 @@ local cache: { [Player]: { [string]: boolean } } = setmetatable({}, { __mode = "
 local flights: { [Player]: { [string]: Flight } } = setmetatable({}, { __mode = "k" }) :: any
 -- Bumped by every invalidation, so a resolution that started before one isn't cached after it.
 local epoch = 0
+-- Told about every invalidation (the player, or nil for everyone): Commands resends command lists.
+local listeners: { (player: Player?) -> () } = {}
 
 Leave.on(function(player: Player)
 	cache[player] = nil
@@ -150,6 +152,23 @@ function Roles.invalidate(player: Player?)
 		table.clear(cache)
 	else
 		cache[player] = nil
+	end
+	for _, listener in table.clone(listeners) do
+		local ok, err = pcall(listener, player)
+		if not ok then
+			Log.warn(`[HYDROGEN] A role change listener failed: {err}`)
+		end
+	end
+end
+
+-- For kit modules: calls listener(player?) after every invalidation. Returns a remover.
+function Roles.onInvalidate(listener: (player: Player?) -> ()): () -> ()
+	table.insert(listeners, listener)
+	return function()
+		local index = table.find(listeners, listener)
+		if index then
+			table.remove(listeners, index)
+		end
 	end
 end
 

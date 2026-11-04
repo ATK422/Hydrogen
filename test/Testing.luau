@@ -113,6 +113,24 @@ return function()
 			return nil
 		end)
 
+		test.case("expectations compare Vector3 and CFrame arguments by value", function()
+			-- Network objects are created before the harness starts the network.
+			local Aim = Hydrogen.clientEvent("ExpectAim", Hydrogen.gt.any())
+			Hydrogen.test({ players = { "Alice" } }, function(t, alice)
+				t:as(alice, function()
+					Aim:Fire(Vector3.new(1, 2, 3))
+					Aim:Fire(CFrame.new(4, 5, 6))
+				end)
+				t:expect(Aim):firedBy(alice, Vector3.new(1, 2, 3))
+				t:expect(Aim):firedBy(alice, CFrame.new(4, 5, 6))
+				local ok = pcall(function()
+					t:expect(Aim):firedBy(alice, Vector3.new(9, 9, 9))
+				end)
+				check.equal(ok, false)
+			end)
+			return nil
+		end)
+
 		test.case("failed expectations say what happened instead", function()
 			local Ping = Hydrogen.serverEvent("h-Ping", gt.number())
 			local Pong = Hydrogen.clientEvent("h-Pong", gt.number())

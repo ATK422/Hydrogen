@@ -250,6 +250,22 @@ return function()
 			return nil
 		end)
 
+		test.case("the default check also lets in players with the Guards permission \"debug\"", function()
+			local staff: { [Player]: boolean } = {}
+			local removeRole = Hydrogen.Guards.defineRole("dbg-staff", function(player: Player): boolean
+				return staff[player] == true
+			end)
+			local removePermission = Hydrogen.Guards.definePermission("debug", { "dbg-staff" })
+			Hydrogen.test({ systems = { Debug }, players = { "Alice", "Bob" } }, function(t, alice, bob)
+				staff[bob] = true
+				check.equal(t:as(alice, Debug.fetch), nil)
+				check.not_nil(t:as(bob, Debug.fetch))
+			end)
+			removePermission()
+			removeRole()
+			return nil
+		end)
+
 		test.case("an authorize that errors denies and warns", function()
 			Hydrogen.test({ systems = { Debug }, players = { "Alice" } }, function(t, alice)
 				Debug.configure({
@@ -332,6 +348,13 @@ return function()
 				view = t:as(alice, Debug.fetch) :: Hydrogen.DebugView
 				check.equal(view.warnings[#view.warnings].text, "[HYDROGEN] something odd")
 				check.equal(Debug.warnings()[#Debug.warnings()].text, "[HYDROGEN] something odd")
+
+				-- So do the game's own logger lines, with their level.
+				Hydrogen.Log.of("dbg-Shop"):error("payment failed")
+				t:expectWarning("payment failed")
+				local last = Debug.warnings()[#Debug.warnings()]
+				check.equal(last.level, "error")
+				check.not_nil(string.find(last.text, "payment failed", 1, true))
 			end)
 			return nil
 		end)

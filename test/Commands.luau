@@ -276,6 +276,46 @@ return function()
 			end)
 		end)
 
+		test.case("the default resolver asks Hydrogen.Guards, and a role change resends command lists", function()
+			local mods: { [Player]: boolean } = {}
+			table.insert(removers, Hydrogen.Guards.defineRole("mod", function(player: Player): boolean
+				return mods[player] == true
+			end))
+			table.insert(removers, Hydrogen.Guards.definePermission("ban", { "mod" }))
+			-- A Guards permission name, a Guards role name, and a name Guards doesn't know.
+			register("ban", { permission = "ban", run = function() end })
+			register("mute", { permission = "mod", run = function() end })
+			register("wipe", { permission = "owner", run = function() end })
+			Hydrogen.test({ systems = { Commands, Client }, players = { "Alice", "Bob" } }, function(t, alice, bob)
+				local function names(player: Player): string
+					return t:as(player, function()
+						local list = {}
+						for _, info in Client.commands() do
+							table.insert(list, info.name)
+						end
+						return table.concat(list, ",")
+					end)
+				end
+
+				t:advance(0)
+				check.equal(names(bob), "help")
+				check.equal(Commands.execute(bob, "ban").status, "denied")
+
+				mods[bob] = true
+				Hydrogen.Guards.invalidate(bob)
+				t:advance(0)
+				check.equal(names(bob), "ban,help,mute")
+				check.is_true(Commands.execute(bob, "ban").ok)
+				check.is_true(Commands.execute(bob, "mute").ok)
+				check.equal(Commands.execute(bob, "wipe").status, "denied")
+				check.equal(names(alice), "help")
+
+				-- Admins still get everything, including names Guards doesn't know.
+				Commands.configure({ admins = { alice.UserId } })
+				check.is_true(Commands.execute(alice, "wipe").ok)
+			end)
+		end)
+
 		test.case("a permission can be a function of the player", function()
 			register("vip", {
 				permission = function(player: Player): boolean

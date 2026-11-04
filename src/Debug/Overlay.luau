@@ -161,7 +161,7 @@ local function warningLines(lines: Lines, title: string, list: { Server.Warning 
 	else
 		for index = #list, 1, -1 do
 			local warning = list[index]
-			table.insert(lines, `{dim(os.date("%H:%M:%S", warning.at) :: string)} <font color="#FFB86B">{escape(warning.text)}</font>`)
+			table.insert(lines, `{dim(os.date("%H:%M:%S", warning.at) :: string)} <font color="{if warning.level == "error" then "#FF6B6B" else "#FFB86B"}">{escape(warning.text)}</font>`)
 		end
 	end
 	table.insert(lines, "")

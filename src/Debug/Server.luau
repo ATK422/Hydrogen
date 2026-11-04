@@ -7,6 +7,7 @@ local RunService = game:GetService("RunService")
 local Format = require("./Format")
 local Stats = require("./Stats")
 local Log = require("../Log")
+local Roles = require("../Guards/Roles")
 local Runtime = require("../Network/Runtime")
 local StateStore = require("../State/Store")
 
@@ -25,6 +26,8 @@ export type Warning = {
 	text: string,
 	-- Clock.time() when it was printed.
 	at: number,
+	-- "warn" or "error": every Hydrogen.Log warn and error line, Hydrogen's own and the game's loggers'.
+	level: string?,
 }
 
 export type PlayerView = {
@@ -61,12 +64,19 @@ local function isCreator(player: Player): boolean
 	return ok and result == true
 end
 
--- Studio, the owner of a game owned by a user, or a UserId in users.
+-- The Hydrogen.Guards permission that opens server data, when the game defines it.
+Server.PERMISSION = "debug"
+
+-- Studio, the owner of a game owned by a user, a UserId in users, or a player with the Guards
+-- permission "debug" (Guards.definePermission("debug", { "admin" })).
 function Server.defaultAuthorize(player: Player, users: { number }): boolean
 	if RunService:IsStudio() then
 		return true
 	end
-	return table.find(users, player.UserId) ~= nil or isCreator(player)
+	if table.find(users, player.UserId) ~= nil or isCreator(player) then
+		return true
+	end
+	return Roles.permissionExists(Server.PERMISSION) and Roles.can(player, Server.PERMISSION)
 end
 
 -- A check that errors denies, so a broken authorize never opens server data.

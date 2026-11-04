@@ -31,7 +31,8 @@ export type Options = {
 	key: Enum.KeyCode?,
 	-- Server: UserIds allowed to see server data in live servers. Studio is always allowed.
 	users: { number }?,
-	-- Server: replaces the default check (Studio, the owner of a user-owned game, users).
+	-- Server: replaces the default check (Studio, the owner of a user-owned game, users, and
+	-- players with the Hydrogen.Guards permission "debug" when the game defines it).
 	authorize: ((player: Player) -> boolean)?,
 	-- Server: Data.player stores and PlayerStates to show in the overlay's Player tab.
 	inspect: { Inspectable }?,
@@ -176,7 +177,8 @@ function Debug.boot(): BootReport?
 	return bootReport
 end
 
--- This side's recent [HYDROGEN] warnings, oldest first, while Hydrogen.Debug runs in the app.
+-- This side's recent warn and error lines (Hydrogen's and the game's Hydrogen.Log loggers'),
+-- oldest first, while Hydrogen.Debug runs in the app.
 function Debug.warnings(): { Warning }
 	return table.clone(warnings)
 end
@@ -215,8 +217,8 @@ local function answer(player: Player, userId: number?): View?
 	return Server.view(userId, settings.inspect, warnings, bootReport)
 end
 
-local function remember(message: string): boolean?
-	table.insert(warnings, { text = message, at = Clock.time() })
+local function remember(message: string, line: Log.Line?): boolean?
+	table.insert(warnings, { text = message, at = Clock.time(), level = if line then line.level else "warn" })
 	if #warnings > MAX_WARNINGS then
 		table.remove(warnings, 1)
 	end
