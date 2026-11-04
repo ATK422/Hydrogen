@@ -79,9 +79,10 @@ Hydrogen.Signal         -- typed in-process signals: Signal.new(), Connect, Once
 Hydrogen.Scheduler      -- timers tied to lifetimes: after, every, fixed (game loop), debounce, throttle
 Hydrogen.Component      -- code bound to CollectionService-tagged instances: Component.new(tag, options)
 Hydrogen.Input          -- client input actions: contexts with priorities, rebinding, device glyphs, touch buttons
+Hydrogen.Guards         -- server-side rules for incoming traffic: cooldowns, roles, range checks, predicates
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Log: `Hydrogen.Logger`, `Hydrogen.LogLevel`, `Hydrogen.LogThreshold`, `Hydrogen.LogFields`, `Hydrogen.LogMessage`, `Hydrogen.LogLine`, `Hydrogen.LogSink`, `Hydrogen.LogBuffer` and `Hydrogen.LogRateLimitOptions`. Signal adds `Hydrogen.Signal<T...>` and `Hydrogen.Connection`; Scheduler adds `Hydrogen.Timer`, `Hydrogen.EveryOptions` and `Hydrogen.FixedOptions`. For Component: `Hydrogen.Component<I, T>` and `Hydrogen.ComponentOptions<I, A, T>`. For Input: `Hydrogen.InputAction<V>`, `Hydrogen.InputContext`, `Hydrogen.InputDevice`, `Hydrogen.InputKey`, `Hydrogen.InputBinding`, `Hydrogen.InputSavedBindings`, `Hydrogen.InputGlyph`, `Hydrogen.InputConflict` and `Hydrogen.InputSource<V>`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Log: `Hydrogen.Logger`, `Hydrogen.LogLevel`, `Hydrogen.LogThreshold`, `Hydrogen.LogFields`, `Hydrogen.LogMessage`, `Hydrogen.LogLine`, `Hydrogen.LogSink`, `Hydrogen.LogBuffer` and `Hydrogen.LogRateLimitOptions`. Signal adds `Hydrogen.Signal<T...>` and `Hydrogen.Connection`; Scheduler adds `Hydrogen.Timer`, `Hydrogen.EveryOptions` and `Hydrogen.FixedOptions`. For Component: `Hydrogen.Component<I, T>` and `Hydrogen.ComponentOptions<I, A, T>`. For Input: `Hydrogen.InputAction<V>`, `Hydrogen.InputContext`, `Hydrogen.InputDevice`, `Hydrogen.InputKey`, `Hydrogen.InputBinding`, `Hydrogen.InputSavedBindings`, `Hydrogen.InputGlyph`, `Hydrogen.InputConflict` and `Hydrogen.InputSource<V>`. For Guards: `Hydrogen.Guard`, `Hydrogen.GuardOptions`, `Hydrogen.GuardRejectHook`, `Hydrogen.Cooldown`, `Hydrogen.CooldownOptions`, `Hydrogen.RoleResolver`, `Hydrogen.RoleSource`, `Hydrogen.GuardPredicate`, `Hydrogen.RangeOptions` and `Hydrogen.GuardsConfigureOptions`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -1550,6 +1551,18 @@ return {
 	Aim = Gameplay:vector2("Aim", { Enum.UserInputType.MouseMovement, Key.Thumbstick2 }),
 	Zoom = Gameplay:axis("Zoom", { Enum.UserInputType.MouseWheel, { positive = Key.I, negative = Key.O } }),
 	Close = Menu:button("Close", { Key.Backspace, Key.ButtonB }),
+### Guards
+
+`Hydrogen.rateLimit` limits how much a player sends. `Hydrogen.Guards` enforces game rules on what they send: cooldowns, roles and permissions, range checks and your own predicates. Each guard is an ordinary middleware, so it goes on an object with `:Use()` or `:UseRequest()`, or on everything with `Hydrogen.useMiddleware`. A rejected event is dropped. A rejected function request errors back to the client with the reason.
+
+```luau
+-- ReplicatedStorage/Network/Combat.luau (shared)
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local gt = Hydrogen.gt
+
+return {
+	Fireball = Hydrogen.clientEvent("Fireball", gt.Vector3()),
+	Ban = Hydrogen.clientFunction("Ban", gt.args(gt.number()), gt.returns(gt.boolean())),
 }
 ```
 
@@ -1705,6 +1718,124 @@ end)
 - **Saved bindings are a diff, as plain data.** Saving only what the player changed means fixing a default reaches everyone who didn't rebind it. Names instead of EnumItems fit in a DataStore as they are.
 - **Touch buttons are made on first touch.** Keyboard and gamepad players never pay for them. The default grid is one line of code, `touchButton()` gives access to the made button, and `bindButton` / `source` give full control.
 - **No per-frame work when idle.** Keys are routed when they change, through a per-key cache cleared on context or binding changes. The only frame callback runs while the mouse is moving, to clear deltas.
+-- ServerScriptService/Systems/Combat.luau
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local Combat = require(ReplicatedStorage.Network.Combat)
+local Guards = Hydrogen.Guards
+
+-- Roles are defined once, at module top level.
+Guards.defineRole("admin", Guards.userIds({ 12345, 67890 }))
+Guards.defineRole("mod", Guards.groupRank(4242, 200), "admin") -- rank 200+, or any admin
+Guards.definePermission("ban", { "admin", "mod" })
+
+local fireballCooldown = Guards.cooldown(5, { name = "Fireball", charges = 2 })
+
+return Hydrogen.define(function()
+	local CombatSystem = {}
+
+	function CombatSystem:init()
+		Combat.Fireball:Use(Guards.all(
+			Guards.range(60),             -- the target is within 60 studs (plus slack)
+			fireballCooldown:guard()      -- 2 charges, each back 5 s after it's used
+		))
+		Combat.Fireball:On(function(player, target)
+			-- only runs for fireballs that passed every guard
+		end)
+
+		Combat.Ban:UseRequest(Guards.permission("ban", {
+			onReject = function(context, reason)
+				warn(`{context.player} tried to ban: {reason}`)
+			end,
+		}))
+		Combat.Ban:On(function(player, userId)
+			return true
+		end)
+	end
+
+	return CombatSystem
+end)
+```
+
+A client that calls `Ban` without the permission gets the error `[HYDROGEN] Ban request rejected: missing permission "ban"`.
+
+#### Cooldowns
+
+`Guards.cooldown(seconds, options?)` makes a per-player cooldown. Options:
+
+- `name: string?`: shown in reasons, e.g. `Fireball is on cooldown (2.5s left)`.
+- `charges: number?`: uses that can be stored up. Each comes back `seconds` after it was used, one at a time. Defaults to 1.
+- `gap: number?`: the shortest time between two uses, even with charges left.
+- `group: { Cooldown }?`: other cooldowns this one also needs ready and also uses. Give every ability the same global cooldown, or make potions share one.
+
+`cooldown:guard(options?)` is the middleware. Game code can use the same cooldown outside middleware, on the server or to predict on the client:
+
+```luau
+local global = Guards.cooldown(1)
+local potion = Guards.cooldown(30, { name = "Potion", group = { global } })
+
+if potion:use(player) then       -- uses it if ready; false and no change otherwise
+	heal(player)
+end
+potion:ready(player)              -- boolean
+potion:remaining(player)          -- seconds until ready, 0 when ready
+potion:charges(player)            -- charges left (this cooldown only)
+potion:reset(player)              -- every charge back; reset() for everyone
+```
+
+A player's cooldowns are cleared when they leave.
+
+#### Roles and permissions
+
+A role is one or more sources, and a player has it when any source says so:
+
+- `Guards.userIds({ ... })`: these UserIds.
+- `Guards.groupRank(groupId, minRank)`: rank `minRank` or higher in the group.
+- `Guards.gamePass(passId)`: owns the game pass, through `Hydrogen.Receipts.owns`. Add `Hydrogen.Receipts` to the app so ownership is cached and in-game purchases count straight away.
+- A function `(player) -> boolean?`. Return `nil` to mean "no, but ask again next time".
+- Another role's name, e.g. `"admin"` above, so admins are mods too.
+
+`Guards.hasRole(player, role)`, `Guards.can(player, permission)` and `Guards.rolesOf(player)` work anywhere on the server. The first check for a player and role can yield, for a group rank or a game pass. The answer is then cached for the session, and checks made while it resolves wait for the same answer. When something changes, call `Guards.invalidate(player)`, or `Guards.invalidate()` for everyone. A resolver that errors is warned about and counts as no. That answer isn't cached. Cached answers are dropped when the player leaves.
+
+#### Range checks
+
+`Guards.range(studs, options?)` drops a message when its target is more than `studs` from the sender's character. The target is argument `arg` (default 1), or what `target = function(player, ...) ... end` returns. It can be a `Vector3`, `CFrame`, `BasePart`, `Model`, `Attachment` or `Player`. Anything else is rejected as an invalid target, including NaN and infinite positions. A player without a character is rejected too.
+
+Positions on the server lag behind what the client saw, so every check allows `slack` extra studs, 4 by default (a quarter second at the default WalkSpeed). Set it per guard with `slack`, or for every guard with `Guards.configure({ slack = 6 })`. `Guards.inRange(player, target, studs, slack?)` and `Guards.distance(player, target)` do the same check from game code. The character's position comes from its `HumanoidRootPart`, or its `PrimaryPart`. `Guards.configure({ position = function(player) ... end })` replaces that lookup, e.g. for a custom character or in tests.
+
+#### Custom checks and combining guards
+
+`Guards.check(function(player, ...) return ok, reason end)` makes a guard from a function. It gets the raw arguments, before schema validation, so check types before using them. An error in it counts as a rejection and is warned about.
+
+`Guards.all(a, b, ...)` passes when every guard passes, and only uses its cooldowns once everything else passed, so a failed role check doesn't cost a charge. `Guards.any(a, b, ...)` passes when any guard does. `Guards.any(Guards.role("admin"), cooldown:guard())` lets admins skip a cooldown.
+
+Every guard takes `{ reason = "...", onReject = function(context, reason) end }`. `reason` replaces the text the client gets. `onReject` runs for each message it rejects, in its own thread, e.g. to log or kick. `Guards.onReject(fn)` runs for every rejection, from any guard, and returns a function that removes it.
+
+#### Testing guards
+
+Guards read time through `Hydrogen.Clock`, so `Hydrogen.test`'s `t:advance` runs cooldowns out. Fake players have no `GetRankInGroup` and no character. Use function roles or set `GetRankInGroup` on the fake player, and point `Guards.configure({ position = ... })` at a table. Call `Guards.resetConfiguration()` afterwards.
+
+```luau
+Hydrogen.test({ systems = { CombatSystem }, players = { "Alice" } }, function(t, alice)
+	Guards.configure({ position = function() return Vector3.zero end })
+	Combat.Fireball:Fire(Vector3.new(10, 0, 0))
+	Combat.Fireball:Fire(Vector3.new(10, 0, 0))
+	Combat.Fireball:Fire(Vector3.new(10, 0, 0)) -- no charge left: dropped
+	t:expect(Combat.Fireball):firedTimes(2)
+	t:advance(5)
+	Combat.Fireball:Fire(Vector3.new(10, 0, 0))
+	t:expect(Combat.Fireball):firedTimes(3)
+end)
+Guards.resetConfiguration()
+```
+
+#### Why it's designed this way
+
+- **Guards are plain middleware.** They use the same `:Use` / `:UseRequest` / `useMiddleware` as everything else, so there's nothing new to wire up, and onion ordering works the same way. `Guards.all` and `Guards.any` find each guard's rules through a weak table keyed by the function.
+- **Server-side, incoming only.** Guards act on what the server receives from a player and pass everything else through, so putting one on a shared object, or globally, is safe.
+- **Reasons for functions, silence for events.** A function caller is waiting, so it gets a clear error rather than a timeout. An event has no reply, so it's dropped.
+- **Cooldowns are used last, and all at once.** Every other check runs first. Then every cooldown is checked and used in one step that can't yield, so a failing role check costs nothing and two messages can't take the last charge.
+- **Fail closed.** A predicate or resolver that errors denies the message, and a role answer that couldn't be worked out isn't cached.
+- **Cheap on hot paths.** A cooldown is one number per player. A cached role check is two table lookups. Nothing allocates per message unless it's rejected. Leave tracking starts the first time a guard stores something for a player, so a game that never uses Guards pays nothing.
 
 ---
 
@@ -1790,6 +1921,13 @@ src/
   Component/
     init.luau          Component.new: options, per-instance entries, construct/destroy, lookups
     Source.luau        where tag changes come from: CollectionService signals, or polling under a fake clock
+  Guards/
+    init.luau          public API: guard constructors, all/any, role and range helpers, configure
+    Guard.luau         guards as middleware: specs, rejection (DROP or error), onReject hooks, atomic cooldown use
+    Cooldown.luau      per-player cooldowns with charges, gaps and groups
+    Roles.luau         role and permission registry, resolvers, per-session cache with in-flight dedupe
+    Range.luau         character and target positions, distance checks
+    Leave.luau         clears guard state when a player leaves (Players or the loopback)
   Testing/
     init.luau          Hydrogen.test and Hydrogen.harness
     Expect.luau        expectations on deliveries, argument matching, failure messages
@@ -1806,6 +1944,7 @@ test/
   Character.luau       character hooks, the Definition.hooks extension point, and used systems being added
   Signal.luau  Scheduler.luau
   Component.luau       Hydrogen.Component under Hydrogen.test (polling), and through CollectionService signals on a fake world
+  Guards.luau          Hydrogen.Guards as middleware under Hydrogen.test
   Fixtures/            modules the suites require
 bench/                 micro-benchmarks, not run by the suite (lune run bench/Signal)
 docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them

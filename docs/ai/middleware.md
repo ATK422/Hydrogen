@@ -136,4 +136,4 @@ Under `Hydrogen.loopback()`, messages go through middleware in both directions. 
 
 ## Works with
 
-`network.md`, `network-performance.md`.
+`network.md`, `network-performance.md`, `guards.md` (cooldowns, roles, range checks and predicates as middleware).

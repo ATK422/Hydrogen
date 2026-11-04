@@ -14,6 +14,7 @@ local Signal = require("@self/Signal")
 local Scheduler = require("@self/Scheduler")
 local Component = require("@self/Component")
 local Input = require("@self/Input")
+local Guards = require("@self/Guards")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -96,6 +97,16 @@ export type InputSavedBindings = Input.SavedBindings
 export type InputGlyph = Input.Glyph
 export type InputConflict = Input.Conflict
 export type InputSource<V> = Input.Source<V>
+export type Guard = Guards.Guard
+export type GuardOptions = Guards.GuardOptions
+export type GuardRejectHook = Guards.RejectHook
+export type Cooldown = Guards.Cooldown
+export type CooldownOptions = Guards.CooldownOptions
+export type RoleResolver = Guards.Resolver
+export type RoleSource = Guards.RoleSource
+export type GuardPredicate = Guards.Predicate
+export type RangeOptions = Guards.RangeOptions
+export type GuardsConfigureOptions = Guards.ConfigureOptions
 
 return {
 	App = App,
@@ -153,4 +164,6 @@ return {
 	Component = Component,
 	-- Client input actions: contexts with priorities, rebinding, device glyphs, touch buttons.
 	Input = Input,
+	-- Server-side rules for incoming traffic: cooldowns, roles and permissions, range checks, predicates.
+	Guards = Guards,
 }
