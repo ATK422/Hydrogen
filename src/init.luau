@@ -1,6 +1,7 @@
 local Definition = require("@self/Definition")
 local App = require("@self/App")
 local Network = require("@self/Network")
+local State = require("@self/State")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -22,6 +23,17 @@ export type RateLimitOptions = Network.RateLimitOptions
 export type Namespace = Network.Namespace
 export type Loopback = Network.Loopback
 
+export type StateValue<T> = State.Value<T>
+export type StateMap<K, V> = State.Map<K, V>
+export type StateList<T> = State.List<T>
+export type PlayerValue<T> = State.PlayerValue<T>
+export type PlayerMap<K, V> = State.PlayerMap<K, V>
+export type PlayerList<T> = State.PlayerList<T>
+export type Computed<T> = State.Computed<T>
+export type StateOptions = State.Options
+export type PlayerStateOptions = State.PlayerOptions
+export type StateSerializer = State.Serializer
+
 return {
 	App = App,
 	define = Definition.define,
@@ -39,4 +51,6 @@ return {
 	DROP = Network.DROP,
 	-- The GreenTea instance Hydrogen validates with, so schemas always match its version.
 	gt = gt,
+	-- Server-authoritative state replicated to clients.
+	State = State,
 }

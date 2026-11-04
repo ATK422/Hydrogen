@@ -57,9 +57,10 @@ Hydrogen.rateLimit      -- build a middleware that drops a player's messages bey
 Hydrogen.DROP           -- return this from a middleware to stop a message
 Hydrogen.loopback       -- headless tests: one VM plays the server and fake clients
 Hydrogen.gt             -- GreenTea, for writing schemas
+Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback` and `Hydrogen.AppOptions`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback` and `Hydrogen.AppOptions`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -448,6 +449,77 @@ What `app:start()` does, in order:
 - Middleware added after a message is queued does not run on it; add middleware before firing anything.
 - With batching on, events go out on `Heartbeat`, at the end of the frame they were fired in. A function call first sends the events already waiting for its target.
 
+### State
+
+`Hydrogen.State` is state the server owns and clients see: the round phase, a timer, each player's coins, a leaderboard, an inventory. Define it once in a shared module, write it on the server, and read or observe it anywhere.
+
+```luau
+-- ReplicatedStorage/Network/GameState.luau (required by addNetwork on both sides)
+local State = Hydrogen.State
+local gt = Hydrogen.gt
+
+return {
+	Round = State.value("Round", gt.string(), "Lobby"),                      -- everyone sees it
+	Scores = State.map("Scores", gt.string(), gt.number()),                  -- sent as key diffs
+	Feed = State.list("Feed", gt.string()),                                  -- sent as inserts/removes
+	Coins = State.playerValue("Coins", gt.number(), 0),                      -- only that player sees it
+	Level = State.playerValue("Level", gt.number(), 1, { visibleTo = "everyone" }),
+	Inventory = State.playerMap("Inventory", gt.string(), gt.number()),
+}
+```
+
+```luau
+-- server
+GameState.Round:set("Playing")
+GameState.Coins:update(player, function(coins) return coins + 10 end)
+GameState.Inventory:set(player, "sword", 1)
+
+-- client
+GameState.Round:observe(function(round)
+	statusLabel.Text = round -- called now with the current value, then on every change
+end)
+local coins = GameState.Coins:get(Players.LocalPlayer)
+```
+
+There is nothing to add to the app: defining a state registers its network event, and the server starts replicating the first time state is used.
+
+| Constructor | Holds | Who sees it | Writes (server) | Reads (both sides) |
+| --- | --- | --- | --- | --- |
+| `State.value(name, schema, initial)` | one value | everyone | `set`, `update` | `get`, `observe` |
+| `State.map(name, keySchema, valueSchema)` | key → value | everyone | `set` (nil removes), `remove`, `update`, `replace`, `clear` | `get`, `all`, `size`, `observe`, `observeKey`, `onChange` |
+| `State.list(name, itemSchema)` | array | everyone | `push`, `insert`, `remove`, `set`, `replace`, `clear` | `get`, `all`, `size`, `observe` |
+| `State.playerValue` / `playerMap` / `playerList` | the same, per player | the owner, or everyone with `visibleTo = "everyone"` | the same, player first: `Coins:set(player, 10)` | the same, player first: `Coins:get(player)` |
+| `State.computed(fn)` | `fn()` | each side computes its own | none | `get`, `observe` |
+
+Options, as the last argument:
+
+- `visibleTo = "owner" | "everyone"`: per-player state only. Defaults to `"owner"`.
+- `encode = true`: packs the state's messages with [buffer encoding](#buffer-encoding).
+- `serializer = { schema, serialize, deserialize }`: sends values in another form, e.g. a class instance as a number. `schema` describes the serialized form and is what the wire is checked against; writes are still checked against the state's own schema.
+
+Rules worth knowing:
+
+- **Define states in shared modules that both sides require before `app:start()`**, as with network objects: each state is a `serverEvent` named `State/<name>`, so a state defined on one side only shifts wire ids. Defining one after the network started errors, and so does a duplicate name.
+- **Only the server writes.** A write is checked against the schema (an error at your line), applied at once, and observers on the server run straight away. A write that doesn't change anything (the same number or string) does nothing. A table value always counts as a change, so changing a table in place and setting it again still replicates.
+- **Writes in one frame go out together.** At the end of the frame each changed state sends one message (one per changed player, for per-player state), however many writes it took. Maps send only the changed and removed keys; `replace(entries)` works out the difference for you. Lists send the inserts, removes and sets, or the whole list when that is smaller. Call `State.flush()` to send now, e.g. before firing an event whose listeners expect the new state.
+- **Late joiners get a snapshot.** When a player joins, they are sent everything already written that they may see, then every change after it. It arrives in the ready handshake, so client systems see it in `start`.
+- **Players leaving.** Other clients drop a departed player's state. On the server it stays readable, so a later `playerRemoving` hook can still save it, and is freed with the player. Writes for a player who left are applied on the server and not sent.
+- **Observers** get the current value immediately, then each change, and return a disconnect function. Map and list observers get a copy of the whole collection; use `observeKey` or `onChange` for one key at a time. An observer that errors is reported with `[HYDROGEN] Observer of State <name> failed` without stopping the others, and one that yields doesn't hold up the write.
+- **Computed state** is a function of other state: `State.computed(function() return Round:get() == "Playing" and Timer:get() > 0 end)`. It depends on whatever it read, through other computed state too, and is never sent: each client computes it from its replicas. It must not yield.
+- Messages are validated on the client like any server event, and go through middleware: `GameState.Round.event` is the underlying `serverEvent`, and `Hydrogen.logger()` shows `State/Round`. With `App.new({ batching = true })` state messages are batched like any other event.
+- **Under `Hydrogen.loopback`**, each fake client has its own replica: code inside `net:as(player, fn)` reads that client's copy, and code outside reads the server's. `State.reset()` puts every state back to its initial value and drops observers; call it between tests.
+
+For other kit modules: per-player state is the layer PlayerState-style modules sit on. Create a `playerValue`, `playerMap` or `playerList` per field from a shared module, choose `visibleTo` per field, and write to it as the data changes; State handles snapshots, diffs and departures.
+
+#### Why it's designed this way
+
+- **One network event per state**, not one channel for everything: each state gets its own GreenTea schema, so the client validates what it receives, `:Encode()` and middleware apply per state, and the logger shows the state's name. Ids come from the same sorted-name rule as every other network object.
+- **Collections send operations, values send values.** A map diff carries parallel key and value arrays rather than a table keyed by your keys, because remotes mangle tables with non-string keys. A list diff carries the operations in order; it falls back to the whole list once a frame has more operations than the list has items.
+- **Flushing at the end of the frame** keeps a loop of 100 writes to one message. Unlike sending immediately, an event fired right after a write can arrive first; that is what `State.flush()` is for.
+- **No system to add.** Replication starts the first time state is used on the server, so a game that never uses State pays nothing (no connections, no per-frame work), and one that does can't forget to add it.
+- **Server per-player state is held weakly by `Player`** rather than deleted on leave, so systems that save in `playerRemoving` still read it, without State having to know when the last hook finished.
+- Compared with Charm/charm-sync and Reflex, there is no single store to slice and diff each frame: each state tracks its own changes as they are written, so an idle game does no work. Compared with ReplicaService, there is no replica object to create and destroy per player: per-player state is created the first time it is written.
+
 ### Testing your systems
 
 Two tools let a test start real systems without a running game: `app:replace` swaps a dependency for a fake, and `Hydrogen.loopback()` stands in for the remotes so client and server systems can talk in one VM. Both work under [Lune](https://lune-org.github.io/docs) and in Studio. `test/Testing.luau` in this repository has runnable examples.
@@ -562,7 +634,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 79 | Passed: 79` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 96 | Passed: 96` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -579,10 +651,18 @@ src/
     Codec.luau         schema-driven buffer encoding for :Encode()
     Loopback.luau      in-memory remotes and fake players for headless tests
     ClientEvent.luau   ServerEvent.luau  ClientFunction.luau  ServerFunction.luau
+  State/
+    init.luau          public API, types, write checks
+    Store.luau         cells per context (server / replica), subscriptions, flush, snapshots, receive
+    Wire.luau          one serverEvent per state, payload schemas per kind
+    Value.luau  Map.luau  List.luau   how each kind diffs, applies and notifies
+    Computed.luau      derived state with dependency tracking
+    Schedule.luau      State's only time source (end of frame), swappable for a fake clock
 test/
   _run.luau            Lune entry point: mocks Roblox globals, patches require, runs suites
   App.luau  Definition.luau  Graph.luau  Network.luau
   Testing.luau         app:replace and Hydrogen.loopback, used the way a game's tests would
+  State.luau           Hydrogen.State end to end through loopback
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
 ```

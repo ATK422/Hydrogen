@@ -2,7 +2,11 @@
 
 All notable changes to Hydrogen are listed here. Versions follow [Semantic Versioning](https://semver.org); while the version is `0.x`, a minor bump can contain breaking changes.
 
-## 0.4.0
+## Unreleased
+
+### Added
+
+- `Hydrogen.State`: server-authoritative state replicated to clients, defined in shared modules. `State.value`, `State.map` and `State.list` for global state; `State.playerValue`, `State.playerMap` and `State.playerList` for per-player state seen by its owner or, with `visibleTo = "everyone"`, by every player; `State.computed` for derived state. Writes are checked against a GreenTea schema and coalesced into one message per changed state per frame (`State.flush()` sends now). Maps send key diffs and lists send operations. Joining players get a snapshot in the ready handshake, and departed players' state is dropped from clients. Options: `encode`, `serializer`. Under `Hydrogen.loopback()` each fake client has its own replica; `State.reset()` clears everything between tests.
 
 ### Added
 
