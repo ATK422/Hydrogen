@@ -8,6 +8,7 @@ local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
+local Commands = require("@self/Commands")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -65,6 +66,24 @@ export type Marketplace = Receipts.Marketplace
 export type MemoryReceiptStore = Receipts.MemoryStore
 export type FakeMarketplace = Receipts.FakeMarketplace
 
+export type CommandSpec = Commands.CommandSpec
+export type CommandContext = Commands.CommandContext
+export type CommandArg = Commands.Arg
+export type CommandArgOptions = Commands.ArgOptions
+export type CommandParseContext = Commands.ParseContext
+export type CommandPermission = Commands.Permission
+export type CommandResult = Commands.CommandResult
+export type CommandStatus = Commands.Status
+export type CommandOutputKind = Commands.OutputKind
+export type CommandOutputLine = Commands.OutputLine
+export type CommandInfo = Commands.CommandInfo
+export type CommandArgInfo = Commands.ArgInfo
+export type CommandCompletion = Commands.Completion
+export type CommandSuggestion = Commands.Suggestion
+export type CommandsOptions = Commands.CommandsOptions
+export type CommandsClientOptions = Commands.ClientOptions
+export type PermissionResolver = Commands.PermissionResolver
+
 return {
 	App = App,
 	define = Definition.define,
@@ -98,4 +117,7 @@ return {
 	State = State,
 	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
 	Receipts = Receipts,
+	-- Kit: in-game commands with typed arguments, run on the server. Add it to the server app,
+	-- and Commands.Client to the client app.
+	Commands = Commands,
 }

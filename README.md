@@ -73,9 +73,10 @@ Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Da
 Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
 Hydrogen.Receipts       -- kit: routes ProcessReceipt and grants each purchase once; add it to the app
+Hydrogen.Commands       -- kit: in-game commands run on the server; add it, and Commands.Client on clients
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Commands: `Hydrogen.CommandSpec`, `Hydrogen.CommandContext`, `Hydrogen.CommandArg`, `Hydrogen.CommandArgOptions`, `Hydrogen.CommandParseContext`, `Hydrogen.CommandPermission`, `Hydrogen.CommandResult`, `Hydrogen.CommandStatus`, `Hydrogen.CommandOutputKind`, `Hydrogen.CommandOutputLine`, `Hydrogen.CommandInfo`, `Hydrogen.CommandArgInfo`, `Hydrogen.CommandCompletion`, `Hydrogen.CommandSuggestion`, `Hydrogen.CommandsOptions`, `Hydrogen.CommandsClientOptions` and `Hydrogen.PermissionResolver`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -1200,6 +1201,96 @@ To fake Receipts itself in a system's test, use `app:replace(Hydrogen.Receipts, 
 - **When unsure, `NotProcessedYet`.** Roblox keeps offering an unacknowledged receipt, so `NotProcessedYet` only delays a purchase, while a wrong `PurchaseGranted` loses it. Because the store keeps the record, a later try can't grant twice.
 - **Waiting, not refusing, while the player loads.** Pending receipts are offered as the player joins, exactly when their data is still loading. Refusing them would leave the purchase until the player's next visit.
 - **One receipt per player at a time.** Grants for the same player can't interleave with each other's saves, so the reasoning above holds for each receipt.
+
+### Commands
+
+`Hydrogen.Commands` gives the game in-game commands: `give me sword 5`, `kick bob`, `/team red`. Each system registers its commands next to its own code. The server parses the arguments, checks permissions and runs the command, and the output goes back to whoever typed it. On the client there's an optional console (F2, or a button on touch screens) with history and autocomplete, and every command also works from the chat bar.
+
+Add the server system and the client system:
+
+```luau
+-- ServerScriptService/Main.server.luau
+app:addSystem(Hydrogen.Commands)
+Hydrogen.Commands.configure({ admins = { 12345678 } }) -- in Studio, everyone may run everything
+app:start()
+
+-- StarterPlayerScripts/Main.client.luau
+app:addSystem(Hydrogen.Commands.Client)
+app:start()
+```
+
+Register commands where the behaviour lives:
+
+```luau
+-- ServerScriptService/Systems/Inventory.luau
+return Hydrogen.define(function(use)
+	local Commands = use(Hydrogen.Commands)
+	local Inventory = {}
+
+	Commands.register("give", {
+		description = "Give items to a player",
+		args = { Commands.player(), gt.string(), gt.number({ integer = true, range = "[1, 999]" }) },
+		permission = "admin",
+		run = function(ctx, target: Player, item: string, count: number)
+			Inventory.give(target, item, count)
+			return `Gave {count} {item} to {target.Name}` -- sent back to ctx.player
+		end,
+	})
+
+	return Inventory
+end)
+```
+
+Typing `give al sword 5` gives Alice five swords. `al` matches the start of a name or display name; `me` is you. Mistakes get answers that say what to fix:
+
+```
+gvie al sword 5      -> Unknown command "gvie". Did you mean "give"? Type "help" for a list.
+give al sword lots   -> Bad argument 3 (integer) for give: expected a whole number from 1 to 999, got "lots". Usage: give <player> <string> <integer>
+give a sword 5       -> Bad argument 1 (player) for give: "a" matches Alice, Alan; type more of the name. Usage: ...
+```
+
+Arguments can be any GreenTea schema, or one of the built-in types: `Commands.player()`, `Commands.players()` (adds `all`, `others` and `me,bob` lists), `Commands.number({ min, max, integer })`, `Commands.integer()`, `Commands.string()`, `Commands.boolean()`, `Commands.enum({ "easy", "hard" })` (or a Roblox `Enum`), and `Commands.text()` for the rest of the line. Wrap one in `Commands.optional(arg, default)`, `Commands.rest(arg)` (every remaining word, as a list) or `Commands.named("count", arg)`, or make your own with `Commands.arg({ name, parse })`. Inside `run`, `ctx:reply(text)` sends a line and `ctx:fail(text)` sends an error and stops.
+
+Permissions are pluggable. A command's `permission` is a string your resolver checks, or a function of the player. By default, the UserIds in `admins` hold every permission, and in Studio everyone does. To use a role system:
+
+```luau
+Hydrogen.Commands.configure({
+	permissions = function(player, permission, command)
+		return Roles.has(player, permission)
+	end,
+})
+Hydrogen.Commands.refresh(player) -- after a player's roles change
+```
+
+Built-in commands: `help [command]` for everyone, and `kick <players> [reason]` with the `admin` permission. Your own command with the same name replaces a built-in; `configure({ help = false, kick = false })` turns them off. To make your own console, pass `Hydrogen.Commands.Client.configure({ console = false })` and use `Client.run(text)`, `Client.onOutput(fn)` and `Client.complete(text)`.
+
+In tests, `Hydrogen.Commands.execute(player, text)` runs a line with every check and returns `{ ok, status, output }`:
+
+```luau
+Hydrogen.test({ systems = { Hydrogen.Commands, Inventory }, players = { "Alice", "Bob" } }, function(t, alice, bob)
+	Hydrogen.Commands.configure({ admins = { alice.UserId } })
+	assert(Hydrogen.Commands.execute(alice, "give bob sword 5").ok)
+	assert(Hydrogen.Commands.execute(bob, "give bob sword 5").status == "denied")
+end)
+```
+
+Rules:
+
+- Add **both** `Hydrogen.Commands` (server) and `Hydrogen.Commands.Client` (every client) before `app:start()`. Each registers the same three network names, so one without the other is a `NETWORK MISMATCH`. A game that adds neither registers nothing.
+- Register each command once: in the system's constructor, or keep the function `register` returns and call it to remove the command.
+- The client only sends the typed line. The server rate-limits it (3 per second, bursts of 6, set with `rateLimit`), caps its length (`maxLength`, 500), then parses, checks the permission and runs it.
+- A permission resolver that errors denies and warns. An error in `run` is warned with a traceback; the player sees `give failed with an error.`
+- Commands appear in each player's `help`, autocomplete and chat bar only if that player may run them. `hidden = true` keeps one out of all three.
+- In the chat bar, a command is `/name`, using names Roblox doesn't already use (Roblox owns `/help`, so it's `/commands` there). The game needs TextChatService. The console and chat commands are built only in a real client.
+
+#### Why it's designed this way
+
+- **Commands live with their system.** A `give` command next to the inventory code stays in sync with it, and `use(Hydrogen.Commands)` keeps the boot order right. One central admin script ends up importing everything.
+- **The client sends text and nothing else.** Exploiters control the client, so parsing, permission checks and the rate limit all happen on the server. The client knows only which commands to suggest.
+- **Errors say which argument and why, plus the usage.** Commands are typed by hand and often on a phone. A reply that names the problem saves the second try.
+- **Permissions are a function, not a role system.** Games already have ranks, groups or a role registry. A single resolver adapts to any of them, and `refresh` keeps the clients' lists right. The default covers the common start: you, plus everyone in Studio.
+- **Two systems, opt-in.** Commands needs network names on both sides, and Hydrogen registers names only for the systems you add. That way a game without commands has no remotes, listeners or UI for them.
+- **Chat commands are made per client.** A `TextChatCommand` created on the server would show every player's chat autocomplete the admin commands. Created on the client, each player sees their own.
 
 ---
 
