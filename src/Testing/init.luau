@@ -31,6 +31,9 @@ export type TestOptions = {
 	-- A fake clock is installed by default, so time only moves on t:advance. false keeps
 	-- real time; a table sets the fake clock's starting values.
 	clock: (boolean | Clock.FakeClockOptions)?,
+	-- Hydrogen.Log's global level during the test, e.g. "debug" to check debug lines with
+	-- t:expectLog. Levels, sinks and the rate limit are put back when the test ends.
+	logLevel: Log.Threshold?,
 }
 
 export type Harness = {
@@ -65,6 +68,11 @@ export type Harness = {
 	-- No warnings were emitted, apart from ones an expectWarning matched.
 	expectNoWarnings: (self: Harness) -> (),
 	warnings: (self: Harness) -> { string },
+	-- A Hydrogen.Log line at exactly level whose text contains text (plain text) was emitted.
+	-- Marks matching warn and error lines as expected, like expectWarning.
+	expectLog: (self: Harness, level: Log.Level, text: string) -> (),
+	-- Every Hydrogen.Log line emitted during the test, oldest first, optionally one level's.
+	logs: (self: Harness, level: Log.Level?) -> { Log.Line },
 	-- Every delivery, oldest first, optionally only one object's.
 	deliveries: (self: Harness, object: any?) -> { Delivery },
 	-- Forgets the deliveries recorded so far, e.g. after setup.
@@ -75,7 +83,7 @@ export type Harness = {
 	close: (self: Harness) -> (),
 }
 
-type Warning = { text: string, expected: boolean }
+type Warning = { text: string, expected: boolean, line: Log.Line? }
 
 -- How long close waits for app:stop() before giving up on a hook that never returns.
 local STOP_TIMEOUT = 5
@@ -148,6 +156,9 @@ function Testing.harness(options: TestOptions?): Harness
 	-- Function calls still running, so their return values land on the right delivery.
 	local running: { [Runtime.Observation]: Delivery } = setmetatable({}, { __mode = "k" }) :: any
 	local warnings: { Warning } = {}
+	local logLines: { Log.Line } = {}
+	local logSnapshot: Log.Snapshot? = nil
+	local removeLogSink: (() -> ())? = nil
 	local joined: { Player } = {}
 	local started = false
 	-- The app's start returned, so its stop hooks have something to stop.
@@ -309,6 +320,48 @@ function Testing.harness(options: TestOptions?): Harness
 		return list
 	end
 
+	function harness:expectLog(level: Log.Level, text: string)
+		if level ~= "debug" and level ~= "info" and level ~= "warn" and level ~= "error" then
+			error(`[HYDROGEN] t:expectLog expects a level: "debug", "info", "warn" or "error", got {level}`, 2)
+		end
+		local found = false
+		if level == "warn" or level == "error" then
+			-- Every warn and error line reaches the harness's capture, even ones no sink saw.
+			for _, warning in warnings do
+				local line = warning.line
+				if line and line.level == level and string.find(line.text, text, 1, true) then
+					found = true
+					warning.expected = true
+				end
+			end
+		else
+			for _, line in logLines do
+				if line.level == level and string.find(line.text, text, 1, true) then
+					found = true
+				end
+			end
+		end
+		if not found then
+			local lines = {}
+			for _, line in logLines do
+				table.insert(lines, `  {line.level}: {line.text}`)
+			end
+			local seen = if #lines == 0 then "nothing was logged" else `the lines were:\n{table.concat(lines, "\n")}`
+			local hint = if level == "debug" and Log.level() ~= "debug" then ` (the log level is {Log.level()}; pass logLevel = "debug" in the test options to see debug lines)` else ""
+			error(`[HYDROGEN] Expected a {level} line containing "{text}", but {seen}{hint}`, 2)
+		end
+	end
+
+	function harness:logs(level: Log.Level?): { Log.Line }
+		local list = {}
+		for _, line in logLines do
+			if level == nil or line.level == level then
+				table.insert(list, line)
+			end
+		end
+		return list
+	end
+
 	function harness:deliveries(object: any?): { Delivery }
 		if object == nil then
 			return table.clone(deliveries)
@@ -360,6 +413,12 @@ function Testing.harness(options: TestOptions?): Harness
 		if uncapture then
 			uncapture()
 		end
+		if removeLogSink then
+			removeLogSink()
+		end
+		if logSnapshot then
+			Log._restore(logSnapshot)
+		end
 		if self.clock then
 			step(function()
 				(self.clock :: Clock.FakeClock):restore()
@@ -367,9 +426,10 @@ function Testing.harness(options: TestOptions?): Harness
 		end
 
 		-- Unexpected warnings still reach the output, after the test, so nothing is hidden.
+		-- Straight to the console: sinks already saw them when they were logged.
 		for _, warning in warnings do
 			if not warning.expected then
-				Log.warn(warning.text)
+				Log.output(warning.text)
 			end
 		end
 
@@ -387,8 +447,16 @@ function Testing.harness(options: TestOptions?): Harness
 
 		harness.net = Network.loopback()
 		Runtime.Observer = record
-		uncapture = Log.capture(function(message: string): boolean?
-			table.insert(warnings, { text = message, expected = false })
+		logSnapshot = Log._snapshot()
+		if settings.logLevel ~= nil then
+			Log.setLevel(settings.logLevel)
+		end
+		removeLogSink = Log._addDirectSink(function(line: Log.Line)
+			table.insert(logLines, line)
+		end)
+		uncapture = Log.capture(function(message: string, line: Log.Line): boolean?
+			local warning = { text = message, expected = false, line = line }
+			table.insert(warnings, warning)
 			return true
 		end)
 

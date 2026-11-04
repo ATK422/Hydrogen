@@ -44,7 +44,7 @@ Remotes.PlaceTower:Use(Hydrogen.rateLimit({
 | `fn:UseResponse(mw: Middleware<R...>): () -> ()` | Function return values. |
 | `Hydrogen.useMiddleware(mw: AnyMiddleware): () -> ()` | Every network object. |
 | `Hydrogen.DROP` | Return it instead of values to stop the message. |
-| `Hydrogen.logger(options: LoggerOptions?): AnyMiddleware` | `filter: ((context) -> boolean)?`, `output: ((string) -> ())?` |
+| `Hydrogen.logger(options: LoggerOptions?): AnyMiddleware` | `filter: ((context) -> boolean)?`, `output: ((string) -> ())?` (default: `Hydrogen.Log`, level info, tag `HYDROGEN`) |
 | `Hydrogen.rateLimit(options: RateLimitOptions): AnyMiddleware` | `perSecond: number`, `burst: number?` (defaults to `perSecond`), `onLimit: ((context) -> ())?` |
 
 `MiddlewareContext` fields:
@@ -68,6 +68,7 @@ Remotes.PlaceTower:Use(Hydrogen.rateLimit({
 - Add middleware before firing anything. Messages already queued don't run through middleware added later.
 - `rateLimit` gives each player a separate allowance for each object. It only limits what the server receives (incoming events and function requests); everything else passes through. A limited function request errors back to the client.
 - `logger` is global middleware, so it logs what is actually on the wire: after your outgoing object middleware, and before your incoming object middleware.
+- Without `output`, `logger` lines go through `Hydrogen.Log` at `info` with the tag `HYDROGEN` (text unchanged), so log levels, sinks, buffers and `t:expectLog` see them. `Hydrogen.Log.setLevel("warn", "HYDROGEN")` hides them along with other Hydrogen info lines. See log.md.
 - With `:Encode()`, middleware still sees plain values. Encoding happens after outgoing middleware.
 
 ## Recipes

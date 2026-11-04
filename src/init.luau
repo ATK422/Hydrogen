@@ -8,6 +8,7 @@ local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
+local Log = require("@self/Log")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -65,6 +66,16 @@ export type Marketplace = Receipts.Marketplace
 export type MemoryReceiptStore = Receipts.MemoryStore
 export type FakeMarketplace = Receipts.FakeMarketplace
 
+export type Logger = Log.Logger
+export type LogLevel = Log.Level
+export type LogThreshold = Log.Threshold
+export type LogFields = Log.Fields
+export type LogMessage = Log.Message
+export type LogLine = Log.Line
+export type LogSink = Log.Sink
+export type LogBuffer = Log.Buffer
+export type LogRateLimitOptions = Log.RateLimitOptions
+
 return {
 	App = App,
 	define = Definition.define,
@@ -74,7 +85,18 @@ return {
 	serverFunction = Network.serverFunction,
 	namespace = Network.namespace,
 	useMiddleware = Network.useMiddleware,
-	logger = Network.logger,
+	-- Without an output option, traffic lines go through Hydrogen.Log (info, tag HYDROGEN).
+	logger = function(options: Network.LoggerOptions?): Network.AnyMiddleware
+		if options and options.output then
+			return Network.logger(options)
+		end
+		return Network.logger({
+			filter = options and options.filter,
+			output = function(message: string)
+				Log.line("info", message)
+			end,
+		})
+	end,
 	rateLimit = Network.rateLimit,
 	-- Headless tests: this VM plays the server and fake clients, without real remotes.
 	loopback = Network.loopback,
@@ -98,4 +120,6 @@ return {
 	State = State,
 	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
 	Receipts = Receipts,
+	-- Tagged, levelled, structured logging: Log.of(system or name, player?), levels, sinks.
+	Log = Log.api,
 }
