@@ -7,6 +7,7 @@ local Scope = require("@self/Scope")
 local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
+local Receipts = require("@self/Receipts")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -54,6 +55,16 @@ export type StateOptions = State.Options
 export type PlayerStateOptions = State.PlayerOptions
 export type StateSerializer = State.Serializer
 
+export type Receipt = Receipts.Receipt
+export type PurchaseDecision = Receipts.Decision
+export type ProductHandler = Receipts.ProductHandler
+export type GamePassHandler = Receipts.GamePassHandler
+export type ReceiptStore = Receipts.ReceiptStore
+export type ReceiptsOptions = Receipts.ReceiptsOptions
+export type Marketplace = Receipts.Marketplace
+export type MemoryReceiptStore = Receipts.MemoryStore
+export type FakeMarketplace = Receipts.FakeMarketplace
+
 return {
 	App = App,
 	define = Definition.define,
@@ -85,4 +96,6 @@ return {
 	PlayerState = PlayerState,
 	-- Server-authoritative state replicated to clients.
 	State = State,
+	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
+	Receipts = Receipts,
 }

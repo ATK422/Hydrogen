@@ -64,9 +64,10 @@ Hydrogen.Scope          -- cleanup tied to lifetimes: Scope.new(), Scope.of(syst
 Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Data.store, Data.memory
 Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
+Hydrogen.Receipts       -- kit: routes ProcessReceipt and grants each purchase once; add it to the app
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -1039,6 +1040,158 @@ Systems are still module singletons: state a system keeps in its own tables live
 
 **The dependency graph and network runtime stay module-global.** Moving them into each app wouldn't isolate apps, because the systems and network objects themselves are module singletons. Real isolation would need `define` to build a fresh system per app, so `require(DataSystem)` would return a definition instead of the system, which breaks every game that calls systems directly. For tests, `app:stop()` and `loopback:close()` undo what a test changes instead.
 
+### Receipts
+
+`Hydrogen.Receipts` sets `MarketplaceService.ProcessReceipt` for you and sends each developer product purchase to the handler registered for its product. It grants every purchase once, and answers Roblox `PurchaseGranted` only after the grant is saved. It also handles game pass ownership.
+
+```luau
+-- ServerScriptService/Main.server.luau
+local app = Hydrogen.App.new()
+app:addSystemsFolders(ServerScriptService.Systems)
+app:addSystem(Hydrogen.Receipts) -- after the system that saves player data
+app:start()
+```
+
+```luau
+-- ServerScriptService/Systems/Shop.luau
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local DataSystem = require(script.Parent.Data)
+
+local VIP_PASS = 7654321
+
+return Hydrogen.define(function(use)
+	local Receipts = use(Hydrogen.Receipts)
+	local Data = use(DataSystem)
+
+	Receipts.products({
+		[1234567] = function(player, receipt)
+			Data.addCoins(player, 100)
+		end,
+		[1234568] = function(player, receipt)
+			if Data.inventoryFull(player) then
+				return false -- not now: Roblox offers the receipt again later
+			end
+			Data.giveItem(player, "Sword")
+		end,
+	})
+
+	-- Runs once per session for each player who owns the pass: on join, or when they buy it.
+	Receipts.gamePass(VIP_PASS, function(player)
+		Data.setVip(player, true)
+	end)
+
+	local Shop = {}
+
+	function Shop.buyCoins(player: Player)
+		Receipts.promptProduct(player, 1234567)
+	end
+
+	function Shop.isVip(player: Player): boolean
+		return Receipts.owns(player, VIP_PASS) -- yields the first time, then cached
+	end
+
+	return Shop
+end)
+```
+
+What happens to each receipt:
+
+1. Receipts waits until the player is in the server and their purchase record is loaded (up to `loadTimeout`, 30 seconds by default). Receipts usually arrive as a player joins, while their data is still loading.
+2. It asks the store whether this purchase was granted before. If it was, it makes sure that grant is saved and answers `PurchaseGranted` without granting again.
+3. It calls the product's handler through the store, which records the purchase id in the same save as the grant and returns once that save succeeded. Then it answers `PurchaseGranted` and calls `onGranted` listeners.
+
+It answers `NotProcessedYet` instead, and Roblox offers the receipt again later (usually when the player next joins a server), when:
+
+- the player leaves, isn't loaded within `loadTimeout`, or their record fails to load;
+- the handler errors (warned with the traceback) or returns `false` (silently);
+- no handler is registered for the product (warned once per purchase). Add the handler and the purchase is granted on the next try;
+- the store can't tell whether the purchase was granted;
+- the grant's save fails. Receipts retries the save twice first. The purchase stays recorded, so a later try only saves it and never grants it again;
+- the server is shutting down.
+
+Rules:
+
+- **Add `Hydrogen.Receipts` to the app**, as with any system you `use`. On the client it binds nothing.
+- **One handler per developer product.** Registering a second errors. `product` and `products` return a function that removes the handlers again. Handlers can be registered at any time, usually in the system's constructor.
+- **Handlers grant; they don't save.** Change the player's data and return. Saving is the store's job, and the store decides when the purchase counts as granted. Return `false` to decline for now; an error does the same, with a warning. A store backed by your data system can hand the handler the player's data: whatever it passes to `grant(...)` arrives after `receipt`.
+- **One receipt at a time per player.** A second receipt for the same player waits for the first. If Roblox offers the same receipt again while the first call is still running, the second call waits for the first and returns its answer.
+- **A leaving player's grant in progress finishes first.** Receipts' `playerRemoving` waits (up to 15 seconds) for a grant that has already started, so a system whose `playerRemoving` runs after Receipts' saves data that includes it. `playerRemoving` runs in reverse order, and systems with no dependency between them run in the order they were added, so add `Hydrogen.Receipts` after the system that saves player data.
+- **Shutdown** (`app:stop()`, bound to `BindToClose`): receipts that haven't started granting answer `NotProcessedYet`, and grants in progress finish first. Afterwards `ProcessReceipt` stays bound and answers `NotProcessedYet`, so another server grants them.
+- **Configure before Receipts starts**, from your main script or a system's `init`. `Receipts.configure(options)` replaces all options:
+  - `store`: where granted purchases are recorded. Defaults to `Receipts.dataStore()`.
+  - `marketplace`: stands in for `MarketplaceService`, such as `Receipts.fakeMarketplace()` in tests.
+  - `loadTimeout`: seconds a receipt waits for its player. Defaults to 30.
+- `Receipts.onGranted(function(player, receipt) ... end)` runs after each purchase this server grants, for purchase history or analytics. It runs in its own thread and doesn't affect the answer. It isn't called again when a duplicate receipt is confirmed.
+
+Game passes:
+
+- `Receipts.owns(player, passId)` asks `UserOwnsGamePassAsync` once per player and pass, retrying twice on errors, and caches the answer for the session. An in-game purchase (`PromptGamePassPurchaseFinished`) sets it to `true` without asking. If Roblox can't be reached it returns `false` without caching, so the next call asks again.
+- `Receipts.gamePass(passId, handler)` runs the handler for each owner once per session: when they join (checked in the background) or when they buy the pass in game. A pass can have several handlers. `Receipts.gamePasses({ [passId] = handler })` registers several.
+- `Receipts.promptProduct(player, productId)` and `Receipts.promptGamePass(player, passId)` show the purchase prompt.
+
+#### Stores
+
+The store is where Receipts records that a purchase was granted. A purchase is granted exactly once only if that record is saved **together with** the grant: both saved, or neither. Saved separately, a crash between the two saves either grants the purchase twice or loses it.
+
+- **`Receipts.dataStore(name?)`** (the default, named `HydrogenReceipts`): one DataStore key per purchase id, written after the handler returns and tagged with the player's UserId. Players who never buy anything cost no requests. Reads and writes are retried twice, and a record still unsaved is tried once more when the player leaves. Because it can't share a save with your game's data, a crash or failed save between your data and this record can grant a purchase twice (your data saved, the record didn't) or lose it (the other way round). Use it when your data lives somewhere Receipts can't reach.
+- **Your data system as the store** (recommended): implement `Hydrogen.ReceiptStore` on top of your player data, keeping the processed purchase ids in the player's profile. Keep that list bounded (the last few hundred ids is plenty), and don't let a save go out while `record` is between `grant()` and adding the id. If your data system already has an apply-once update (run a change and record an id in one commit, then save), `record` can wrap it and `isGranted` can return `false`. Return from `record` without calling `grant` when the update reports a duplicate. `save` must still save the player's data and error on failure, because Receipts retries through it when the update's change was committed but its save failed.
+
+```luau
+export type ReceiptStore = {
+	-- Optional. Yield until the player's record can be read; return false if it failed to load.
+	load: ((self, player: Player) -> boolean?)?,
+	-- Was this purchase granted already (saved or not)? Error if you can't tell.
+	isGranted: (self, player: Player, receipt: Receipt) -> boolean,
+	-- Call grant(...), add receipt.PurchaseId to the profile in the same save, and return once
+	-- that save succeeded. If grant errors, record nothing and let the error through.
+	-- Error if the save fails. Arguments to grant(...) reach the handler after the receipt.
+	-- Already recorded and saved? Return without calling grant: Receipts answers PurchaseGranted.
+	record: (self, player: Player, receipt: Receipt, grant: (...any) -> ()) -> (),
+	-- Make sure an already recorded purchase is saved; return at once if it is. Error if the save fails.
+	save: (self, player: Player, receipt: Receipt) -> (),
+	-- Optional. The player left and their receipts are done.
+	release: ((self, player: Player) -> ())?,
+}
+```
+
+- **`Receipts.memoryStore()`** keeps records in memory, for tests. `store:failSaves(count)` makes the next saves fail; `store:isSaved(purchaseId)` and `store:savedCount()` let a test check what was recorded.
+
+#### Testing purchases
+
+`Receipts.fakeMarketplace()` stands in for `MarketplaceService` and plays Roblox's part, so purchases can be tested under Lune or in Studio without spending Robux:
+
+```luau
+local market = Hydrogen.Receipts.fakeMarketplace()
+local store = Hydrogen.Receipts.memoryStore()
+Hydrogen.Receipts.configure({ marketplace = market, store = store })
+
+local net = Hydrogen.loopback()
+local alice = net:join("Alice")
+local app = Hydrogen.App.new()
+app:addSystems({ Shop, Hydrogen.Receipts })
+app:start()
+
+local decision, receipt = market:purchase(alice, 1234567) -- "PurchaseGranted"
+market:deliver(receipt)         -- the same receipt again: answered, not granted twice
+store:failSaves(10)
+market:purchase(alice, 1234567) -- "NotProcessedYet", and it stays pending
+store:failSaves(0)
+market:retryPending(alice)      -- what Roblox does when Alice rejoins
+market:buyGamePass(alice, VIP_PASS)
+```
+
+The fake also has `pending(player?)`, `setOwnsGamePass(player, passId, owns)`, `failOwnershipChecks(count)`, `ownershipChecks` (a count) and `prompts` (every prompt shown). With an injected marketplace, `ProcessReceipt` returns the strings `"PurchaseGranted"` and `"NotProcessedYet"`; the real `MarketplaceService` gets the `Enum.ProductPurchaseDecision` items.
+
+To fake Receipts itself in a system's test, use `app:replace(Hydrogen.Receipts, fake)` like any other system.
+
+#### Why it's designed this way
+
+- **A system, not a function you call.** `ProcessReceipt` can be set only once per server, but many systems sell things. Receipts owns the callback and systems register handlers. Being a system also gives it the player and shutdown hooks it needs to wait for loading and to finish grants before data is saved.
+- **The store decides when a purchase is granted.** Recording a purchase id anywhere other than with the grant leaves a window where one is saved and the other isn't. Only your data system can save both together, so Receipts hands it the grant to run instead of granting first and recording afterwards. The DataStore default exists so Receipts works with no setup, and its limits are stated above.
+- **When unsure, `NotProcessedYet`.** Roblox keeps offering an unacknowledged receipt, so `NotProcessedYet` only delays a purchase, while a wrong `PurchaseGranted` loses it. Because the store keeps the record, a later try can't grant twice.
+- **Waiting, not refusing, while the player loads.** Pending receipts are offered as the player joins, exactly when their data is still loading. Refusing them would leave the purchase until the player's next visit.
+- **One receipt per player at a time.** Grants for the same player can't interleave with each other's saves, so the reasoning above holds for each receipt.
+
 ---
 
 ## Part 2: Working on Hydrogen itself
@@ -1066,6 +1219,7 @@ pesde run test
 Expected output ends with `Tests Ran: 106 | Passed: 106` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 Expected output ends with `Tests Ran: 108 | Passed: 108` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 Expected output ends with `Tests Ran: 97 | Passed: 97` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 101 | Passed: 101` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -1114,12 +1268,20 @@ test/
     Value.luau  Map.luau  List.luau   how each kind diffs, applies and notifies
     Computed.luau      derived state with dependency tracking
     Schedule.luau      State's only time source (end of frame), swappable for a fake clock
+  Receipts/
+    init.luau          exports the Receipts system and its types
+    Receipts.luau      the system: ProcessReceipt routing, waiting for players, game passes
+    Stores.luau        dataStore and memoryStore
+    FakeMarketplace.luau  stand-in MarketplaceService for tests
+    Types.luau         Receipt, ReceiptStore, Marketplace, options
+    Clock.luau  Log.luau  time sources and warnings, called through tables tests can patch
 test/
   _run.luau            Lune entry point: mocks Roblox globals, patches require, runs suites
   App.luau  Definition.luau  Graph.luau  Network.luau
   Testing.luau         app:replace and Hydrogen.loopback, used the way a game's tests would
   Data.luau  PlayerState.luau
   State.luau           Hydrogen.State end to end through loopback
+  Receipts.luau        Hydrogen.Receipts with a fake marketplace and memory store
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
 ```
