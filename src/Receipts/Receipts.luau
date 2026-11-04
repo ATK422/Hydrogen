@@ -252,8 +252,8 @@ local function grantOnce(entry: Entry, receipt: Receipt): Decision
 	local ran = false
 	local declined = false
 	local handlerError: string? = nil
-	local function grant()
-		local ok, result = xpcall(handler, debug.traceback, player, receipt)
+	local function grant(...: any)
+		local ok, result = xpcall(handler, debug.traceback, player, receipt, ...)
 		if not ok then
 			handlerError = tostring(result)
 			error(result, 0)
@@ -266,11 +266,9 @@ local function grantOnce(entry: Entry, receipt: Receipt): Decision
 
 	local recorded, err = pcall(store.record, store, player, receipt, grant)
 	if recorded then
-		if not ran then
-			Log.warn(`[HYDROGEN] Receipts store recorded purchase {purchaseId} without calling grant; returning NotProcessedYet`)
-			return NOT_PROCESSED
-		end
-		finish(entry, receipt, true)
+		-- A store that dedupes inside record (instead of in isGranted) skips grant for a
+		-- purchase it already holds durably.
+		finish(entry, receipt, ran)
 		return GRANTED
 	elseif declined then
 		return NOT_PROCESSED

@@ -18,8 +18,9 @@ export type Decision = "PurchaseGranted" | "NotProcessedYet"
 
 -- Grants a developer product. Return nothing to grant. Return false to decline for now:
 -- nothing is recorded and Roblox offers the receipt again later. An error does the same,
--- with a warning.
-export type ProductHandler = (player: Player, receipt: Receipt) -> ...boolean
+-- with a warning. Anything the store passes to grant(...) comes after the receipt, e.g. the
+-- player's data table from a data system's store.
+export type ProductHandler = (player: Player, receipt: Receipt, ...any) -> ...boolean
 
 -- Runs once per session for a player who owns the pass, when they join or buy it.
 export type GamePassHandler = (player: Player, passId: number) -> ()
@@ -34,8 +35,10 @@ export type ReceiptStore = {
 	isGranted: (self: any, player: Player, receipt: Receipt) -> boolean,
 	-- Calls grant, records the purchase in the same save as grant's changes, and returns once
 	-- that save is durable. If grant errors, record nothing and let the error through.
-	-- Error if the save fails.
-	record: (self: any, player: Player, receipt: Receipt, grant: () -> ()) -> (),
+	-- Error if the save fails. Arguments passed to grant(...) reach the handler after the receipt.
+	-- If the purchase turns out to be recorded and durable already, return without calling
+	-- grant: Receipts then answers PurchaseGranted without granting.
+	record: (self: any, player: Player, receipt: Receipt, grant: (...any) -> ()) -> (),
 	-- Makes a purchase that record or an earlier server already recorded durable.
 	-- Returns at once when it already is. Error if the save fails.
 	save: (self: any, player: Player, receipt: Receipt) -> (),

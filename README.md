@@ -612,7 +612,7 @@ Rules:
 
 - **Add `Hydrogen.Receipts` to the app**, as with any system you `use`. On the client it binds nothing.
 - **One handler per developer product.** Registering a second errors. `product` and `products` return a function that removes the handlers again. Handlers can be registered at any time, usually in the system's constructor.
-- **Handlers grant; they don't save.** Change the player's data and return. Saving is the store's job, and the store decides when the purchase counts as granted. Return `false` to decline for now; an error does the same, with a warning.
+- **Handlers grant; they don't save.** Change the player's data and return. Saving is the store's job, and the store decides when the purchase counts as granted. Return `false` to decline for now; an error does the same, with a warning. A store backed by your data system can hand the handler the player's data: whatever it passes to `grant(...)` arrives after `receipt`.
 - **One receipt at a time per player.** A second receipt for the same player waits for the first. If Roblox offers the same receipt again while the first call is still running, the second call waits for the first and returns its answer.
 - **A leaving player's grant in progress finishes first.** Receipts' `playerRemoving` waits (up to 15 seconds) for a grant that has already started, so a system whose `playerRemoving` runs after Receipts' saves data that includes it. `playerRemoving` runs in reverse order, and systems with no dependency between them run in the order they were added, so add `Hydrogen.Receipts` after the system that saves player data.
 - **Shutdown** (`app:stop()`, bound to `BindToClose`): receipts that haven't started granting answer `NotProcessedYet`, and grants in progress finish first. Afterwards `ProcessReceipt` stays bound and answers `NotProcessedYet`, so another server grants them.
@@ -633,7 +633,7 @@ Game passes:
 The store is where Receipts records that a purchase was granted. A purchase is granted exactly once only if that record is saved **together with** the grant: both saved, or neither. Saved separately, a crash between the two saves either grants the purchase twice or loses it.
 
 - **`Receipts.dataStore(name?)`** (the default, named `HydrogenReceipts`): one DataStore key per purchase id, written after the handler returns and tagged with the player's UserId. Players who never buy anything cost no requests. Reads and writes are retried twice, and a record still unsaved is tried once more when the player leaves. Because it can't share a save with your game's data, a crash or failed save between your data and this record can grant a purchase twice (your data saved, the record didn't) or lose it (the other way round). Use it when your data lives somewhere Receipts can't reach.
-- **Your data system as the store** (recommended): implement `Hydrogen.ReceiptStore` on top of your player data, keeping the processed purchase ids in the player's profile. Keep that list bounded (the last few hundred ids is plenty), and don't let a save go out while `record` is between `grant()` and adding the id.
+- **Your data system as the store** (recommended): implement `Hydrogen.ReceiptStore` on top of your player data, keeping the processed purchase ids in the player's profile. Keep that list bounded (the last few hundred ids is plenty), and don't let a save go out while `record` is between `grant()` and adding the id. If your data system already has an apply-once update (run a change and record an id in one commit, then save), `record` can wrap it and `isGranted` can return `false`. Return from `record` without calling `grant` when the update reports a duplicate. `save` must still save the player's data and error on failure, because Receipts retries through it when the update's change was committed but its save failed.
 
 ```luau
 export type ReceiptStore = {
@@ -641,10 +641,11 @@ export type ReceiptStore = {
 	load: ((self, player: Player) -> boolean?)?,
 	-- Was this purchase granted already (saved or not)? Error if you can't tell.
 	isGranted: (self, player: Player, receipt: Receipt) -> boolean,
-	-- Call grant(), add receipt.PurchaseId to the profile in the same save, and return once
-	-- that save succeeded. If grant() errors, record nothing and let the error through.
-	-- Error if the save fails.
-	record: (self, player: Player, receipt: Receipt, grant: () -> ()) -> (),
+	-- Call grant(...), add receipt.PurchaseId to the profile in the same save, and return once
+	-- that save succeeded. If grant errors, record nothing and let the error through.
+	-- Error if the save fails. Arguments to grant(...) reach the handler after the receipt.
+	-- Already recorded and saved? Return without calling grant: Receipts answers PurchaseGranted.
+	record: (self, player: Player, receipt: Receipt, grant: (...any) -> ()) -> (),
 	-- Make sure an already recorded purchase is saved; return at once if it is. Error if the save fails.
 	save: (self, player: Player, receipt: Receipt) -> (),
 	-- Optional. The player left and their receipts are done.
@@ -714,7 +715,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 100 | Passed: 100` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 101 | Passed: 101` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 

@@ -756,6 +756,117 @@ return function()
 			return nil
 		end)
 
+		test.case("a store built on an apply-once data update", function()
+			-- Stands in for a data system with updateOnce(player, id, fn) -> "applied" |
+			-- "duplicate" | "aborted" | "failed", which commits fn's change and the id together
+			-- and returns once the save holding both is durable.
+			local saveFailures = 0
+			local profiles: { [number]: { data: { coins: number }, ids: { [string]: true }, dirty: boolean, durable: { coins: number }? } } =
+				{}
+			local function profile(player: Player)
+				local found = profiles[player.UserId]
+				if not found then
+					found = { data = { coins = 0 }, ids = {}, dirty = false, durable = nil }
+					profiles[player.UserId] = found
+				end
+				return found
+			end
+			local function saveProfile(player: Player): (boolean, string?)
+				if saveFailures > 0 then
+					saveFailures -= 1
+					return false, "save failed"
+				end
+				local found = profile(player)
+				found.durable = table.clone(found.data)
+				found.dirty = false
+				return true, nil
+			end
+			local function updateOnce(player: Player, id: string, fn: (data: { coins: number }) -> boolean?): string
+				local found = profile(player)
+				if found.ids[id] then
+					if found.dirty and not saveProfile(player) then
+						return "failed"
+					end
+					return "duplicate"
+				end
+				local copy = table.clone(found.data)
+				local ok, result = pcall(fn, copy)
+				if not ok then
+					return "failed"
+				elseif result == false then
+					return "aborted"
+				end
+				found.data = copy
+				found.ids[id] = true
+				found.dirty = true
+				return if saveProfile(player) then "applied" else "failed"
+			end
+
+			local store = {
+				isGranted = function(_self: any, _player: Player, _receipt: Hydrogen.Receipt): boolean
+					return false
+				end,
+				record = function(_self: any, player: Player, receipt: Hydrogen.Receipt, grant: (...any) -> ())
+					local result = updateOnce(player, receipt.PurchaseId, function(data)
+						grant(data)
+						return nil
+					end)
+					if result == "failed" or result == "aborted" then
+						error(`updateOnce {result}`)
+					end
+				end,
+				save = function(_self: any, player: Player, _receipt: Hydrogen.Receipt)
+					local ok, err = saveProfile(player)
+					if not ok then
+						error(err)
+					end
+				end,
+			}
+
+			local market = Receipts.fakeMarketplace()
+			local coins = productId()
+			local broken = false
+			local announced = 0
+			register(Receipts.product(coins, function(_player, _receipt, data)
+				if broken then
+					error("broken handler")
+				end
+				data.coins += 100
+			end))
+			register(Receipts.onGranted(function()
+				announced += 1
+			end))
+
+			local app = newApp(market, store)
+			local alice = fakePlayer("Alice")
+			app:_addPlayer(alice)
+
+			local decision, receipt = market:purchase(alice, coins)
+			check.equal(decision, "PurchaseGranted")
+			check.equal(profiles[alice.UserId].durable and profiles[alice.UserId].durable.coins, 100)
+			check.equal(announced, 1)
+
+			-- The same receipt in the next server: updateOnce reports a duplicate, so no grant.
+			app:stop()
+			local nextApp = newApp(market, store)
+			nextApp:_addPlayer(alice)
+			check.equal(market:deliver(receipt), "PurchaseGranted")
+			check.equal(profiles[alice.UserId].data.coins, 100)
+			check.equal(announced, 1)
+
+			-- The commit happened but its save failed: Receipts saves again, never grants twice.
+			saveFailures = 1
+			check.equal(market:purchase(alice, coins), "PurchaseGranted")
+			check.equal(profiles[alice.UserId].durable and profiles[alice.UserId].durable.coins, 200)
+
+			-- A handler error commits nothing.
+			broken = true
+			check.equal(market:purchase(alice, coins), "NotProcessedYet")
+			check.equal(profiles[alice.UserId].data.coins, 200)
+			check.equal(warnedAbout("broken handler"), true)
+			return nil
+		end)
+
 		test.case("prompts go to the marketplace", function()
 			local market = Receipts.fakeMarketplace()
 			newApp(market, Receipts.memoryStore())
