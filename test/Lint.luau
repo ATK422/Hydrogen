@@ -249,10 +249,9 @@ return function()
 			check.equal(contains(diagnostic.fix, "stopped booting early"), true)
 		end)
 
-		test.case("reports a State passed to addNetwork, which would never return", function()
-			local diagnostic = one(lint("broken"), "addnetwork-hang")
-			check.equal(diagnostic.locations[1].instance, "ReplicatedStorage.Shared.GameState")
-			check.equal(contains(diagnostic.message, "Round"), true)
+		test.case("a State passed to addNetwork doesn't hang this Hydrogen, so addnetwork-hang stays quiet", function()
+			-- The rule only fires for Hydrogen versions whose object count iterates with `for _, child in value`.
+			check.equal(#find(lint("broken"), "addnetwork-hang"), 0)
 		end)
 
 		test.case("passes Hydrogen's own warnings on", function()

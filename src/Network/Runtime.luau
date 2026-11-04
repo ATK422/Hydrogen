@@ -350,7 +350,7 @@ function Runtime:countObjects(value: any, seen: { [any]: boolean }?): number
     visited[value] = true
 
     local count = 0
-    for _, child in value do
+    for _, child in next, value do
         count += Runtime:countObjects(child, visited)
     end
     return count

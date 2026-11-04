@@ -49,7 +49,7 @@ The setup wizard in `tools/create-hydrogen` could offer the lint (on by default)
 
 - to the generated `AGENTS.md`, a line telling agents to run `pesde run lint -- --json` after changing network code and to fix every `error`.
 
-The example game the wizard writes already lints clean. Its State definitions would need to stay out of `addNetwork` modules until Hydrogen's object count stops looping on them (the `addnetwork-hang` rule).
+The example game the wizard writes already lints clean. On Hydrogen 0.4.0 and older, State definitions must stay out of `addNetwork` modules, because that version's object count loops on them (the `addnetwork-hang` rule); later versions don't.
 
 ## Developing
 

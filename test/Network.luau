@@ -324,6 +324,15 @@ return function()
 			return nil
 		end)
 
+		test.case("countObjects returns on tables with __call, such as GreenTea schemas", function()
+			-- A generic for over a table with __call calls it as the iterator, forever.
+			local callable = setmetatable({ inner = { 1, 2 } }, { __call = function() return 1, 1 end })
+			local event = ServerEvent.new("count-callable", gt.string())
+			check.equal(Network.countObjects(callable), 0)
+			check.equal(Network.countObjects({ Schema = gt.string(), Holder = { schema = gt.number(), event = event } }), 1)
+			return nil
+		end)
+
 		test.case("client event On can disconnect", function()
 			local event = ClientEvent.new("client-on", gt.string())
 			local off = event:On(function() end)

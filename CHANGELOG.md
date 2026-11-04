@@ -47,7 +47,7 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - Live config sources: `Config.experienceConfigs()` (Roblox Experience Configs, refreshed on `UpdateAvailable`), `Config.dataStore(name, { key, topic })` (polling plus an optional MessagingService topic) and `Config.memory()` for tests, behind a one-method source interface. Fetched at start and every `refresh` seconds on `Hydrogen.Clock`; each remote value is validated on its own and the last good value kept when one is rejected or a fetch fails. `Config.useEnvironment` and `Config.reset` for tests; `Hydrogen.test` resets Config when it closes.
 - Types: `Config<V, F>`, `ConfigSpec<V, F>`, `Flag`, `FlagRule`, `ConfigSegment`, `ConfigEnvironment`, `ConfigSource`, `MemoryConfigSource`.
 - Network lint: `pesde x atk422/hydrogen_lint` boots a game's server and client under Lune, each in its own world built from the Rojo sourcemap, and compares what the network registered on each side. It reports one-sided names (with the module, whether clients can see it, and each side's `addNetwork` folders), duplicates (after `Hydrogen.namespace` and `State/<name>`), late registrations (with the line that required the module), kind, schema and `:Encode()` mismatches, `serverFunction`s missing their returns, `clientFunction`s without `gt.args` / `gt.returns`, events nothing listens to, case-only name differences, reserved prefixes, script errors and Hydrogen's boot warnings. Text output with a fix per diagnostic, `--json` for CI and agents, `--strict`, `--ignore`; exit codes 0, 1 and 2. The engine ships in `src/Testing/Lint/` (Lune only, never required by a game); `tools/hydrogen-lint` is the launcher package.
-- The lint's `addnetwork-hang` rule flags a module passed to `app:addNetwork` that returns a `Hydrogen.State` object or a bare GreenTea schema: the object count iterates it with a generic `for`, which calls tables that have `__call` forever.
+- The lint's `addnetwork-hang` rule flags, for games on Hydrogen 0.4.0, a module passed to `app:addNetwork` that returns a `Hydrogen.State` object or a bare GreenTea schema: that version's object count iterates it with a generic `for`, which calls tables that have `__call` forever. Fixed in this release (see Fixed).
 
 ### Changed
 
@@ -63,6 +63,7 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 
 ### Fixed
 
+- `app:addNetwork` no longer hangs on a module that returns a `Hydrogen.State` object, a GreenTea schema or anything holding one. The object count walked tables with a generic `for`, which calls a table that has `__call` as its iterator, forever.
 - `State.reset()` (and so `Hydrogen.test` closing) no longer leaves State unable to replicate when a test ended before its end-of-frame send ran.
 - `Hydrogen.rateLimit` no longer locks a player out when the clock it reads moves backwards (e.g. a bucket made before a test's fake clock was installed).
 

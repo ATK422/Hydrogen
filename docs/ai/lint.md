@@ -114,7 +114,7 @@ Rules (`severity`):
 | --- | --- | --- |
 | `script-error` | error (warning after the network started) | a Script or LocalScript errored while booting |
 | `multiple-runtimes` | error | one side loaded two copies of Hydrogen |
-| `addnetwork-hang` | error | `app:addNetwork` would never return on a module (it returns a State object or a bare GreenTea schema) |
+| `addnetwork-hang` | error | Hydrogen 0.4.0 and older only: `app:addNetwork` would never return on a module (it returns a State object or a bare GreenTea schema). Newer versions count these without looping, and the rule stays quiet. |
 | `one-sided` | error | a name is registered on one side only |
 | `duplicate` | error | a name is registered twice on one side, including `Hydrogen.namespace` prefixes and `State/<name>` |
 | `late-registration` | error | a network object is created after `app:start()` started the network |
@@ -185,7 +185,7 @@ An agent's fix loop: run `pesde x atk422/hydrogen_lint -- --json`, then for each
 - Don't require a network module for the first time from a `start` hook or after `app:start()`; require it before (usually via `app:addNetwork`) (`late-registration`).
 - Don't write `Hydrogen.serverFunction("Ask", gt.string())` and stop; it is curried: `Hydrogen.serverFunction("Ask", gt.string())(gt.number())` (`missing-returns`).
 - Don't pass bare schemas to `clientFunction`; use `Hydrogen.clientFunction("Get", gt.args(gt.string()), gt.returns(gt.number()))` (`function-schema`).
-- Don't pass a module that returns `Hydrogen.State` objects to `app:addNetwork`; require it from systems on both sides at require time instead (`addnetwork-hang`).
+- On Hydrogen 0.4.0 and older, don't pass a module that returns `Hydrogen.State` objects to `app:addNetwork`; require it from systems on both sides at require time instead (`addnetwork-hang`). Later versions handle it, so upgrading also fixes it.
 - Don't name your own objects `State/...`; `Hydrogen.State` registers `State/<name>` for each state (`duplicate`, `reserved-prefix`).
 - Don't silence a `script-error` with `--ignore` without reading it: names registered after the error weren't checked.
 
