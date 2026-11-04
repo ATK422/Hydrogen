@@ -8,6 +8,7 @@ local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
+local Component = require("@self/Component")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -65,6 +66,9 @@ export type Marketplace = Receipts.Marketplace
 export type MemoryReceiptStore = Receipts.MemoryStore
 export type FakeMarketplace = Receipts.FakeMarketplace
 
+export type Component<I, T> = Component.Component<I, T>
+export type ComponentOptions<I, A, T> = Component.Options<I, A, T>
+
 return {
 	App = App,
 	define = Definition.define,
@@ -98,4 +102,6 @@ return {
 	State = State,
 	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
 	Receipts = Receipts,
+	-- Code bound to CollectionService-tagged instances, one object and scope each: Component.new(tag, options).
+	Component = Component,
 }

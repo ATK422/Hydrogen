@@ -20,6 +20,7 @@ require("./Data")()
 require("./PlayerState")()
 require("./State")()
 require("./Receipts")()
+require("./Component")()
 
 local frktest = require("@pkg/frktest")
 local console_reporter = frktest.reporters.console_reporter
