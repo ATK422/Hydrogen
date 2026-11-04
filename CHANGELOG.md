@@ -2,6 +2,15 @@
 
 All notable changes to Hydrogen are listed here. Versions follow [Semantic Versioning](https://semver.org); while the version is `0.x`, a minor bump can contain breaking changes.
 
+## Unreleased
+
+### Added
+
+- `Hydrogen.Receipts`, a system that owns `MarketplaceService.ProcessReceipt` and grants each developer product purchase once. Systems register handlers with `Receipts.product(id, handler)` or `Receipts.products({ ... })`. A receipt waits for its player to load, runs one at a time per player, and is answered `PurchaseGranted` only after the store reports the grant saved. Handler errors, a `false` return, unknown products (warned), players who leave or never load, failed saves (retried first) and shutdown answer `NotProcessedYet`. A leaving player's grant in progress finishes before later `playerRemoving` hooks run. `Receipts.onGranted` reports grants for purchase history or analytics.
+- Game passes in `Hydrogen.Receipts`: `owns` (cached per session, updated by in-game purchases), `gamePass` / `gamePasses` handlers that run once per session for owners, `promptProduct` and `promptGamePass`.
+- Receipt stores: the `ReceiptStore` interface for recording purchases in the same save as the grant, `Receipts.dataStore()` (the default, one DataStore key per purchase) and `Receipts.memoryStore()` for tests.
+- `Receipts.fakeMarketplace()`: a stand-in `MarketplaceService` for tests, with `purchase`, `deliver`, `retryPending`, `buyGamePass` and failure controls.
+
 ## 0.4.0
 
 ### Added

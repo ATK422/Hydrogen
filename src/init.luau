@@ -1,6 +1,7 @@
 local Definition = require("@self/Definition")
 local App = require("@self/App")
 local Network = require("@self/Network")
+local Receipts = require("@self/Receipts")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -22,6 +23,16 @@ export type RateLimitOptions = Network.RateLimitOptions
 export type Namespace = Network.Namespace
 export type Loopback = Network.Loopback
 
+export type Receipt = Receipts.Receipt
+export type PurchaseDecision = Receipts.Decision
+export type ProductHandler = Receipts.ProductHandler
+export type GamePassHandler = Receipts.GamePassHandler
+export type ReceiptStore = Receipts.ReceiptStore
+export type ReceiptsOptions = Receipts.ReceiptsOptions
+export type Marketplace = Receipts.Marketplace
+export type MemoryReceiptStore = Receipts.MemoryStore
+export type FakeMarketplace = Receipts.FakeMarketplace
+
 return {
 	App = App,
 	define = Definition.define,
@@ -39,4 +50,6 @@ return {
 	DROP = Network.DROP,
 	-- The GreenTea instance Hydrogen validates with, so schemas always match its version.
 	gt = gt,
+	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
+	Receipts = Receipts,
 }
