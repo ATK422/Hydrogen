@@ -6,6 +6,7 @@ local Testing = require("@self/Testing")
 local Scope = require("@self/Scope")
 local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
+local State = require("@self/State")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -42,6 +43,17 @@ export type MemoryBackend = Data.MemoryBackend
 export type UpdateOnceResult = Data.UpdateOnceResult
 export type PlayerState<S> = PlayerState.PlayerState<S>
 
+export type StateValue<T> = State.Value<T>
+export type StateMap<K, V> = State.Map<K, V>
+export type StateList<T> = State.List<T>
+export type PlayerValue<T> = State.PlayerValue<T>
+export type PlayerMap<K, V> = State.PlayerMap<K, V>
+export type PlayerList<T> = State.PlayerList<T>
+export type Computed<T> = State.Computed<T>
+export type StateOptions = State.Options
+export type PlayerStateOptions = State.PlayerOptions
+export type StateSerializer = State.Serializer
+
 return {
 	App = App,
 	define = Definition.define,
@@ -71,4 +83,6 @@ return {
 	Data = Data,
 	-- Per-player state from Data or runtime, replicated per field: PlayerState.new.
 	PlayerState = PlayerState,
+	-- Server-authoritative state replicated to clients.
+	State = State,
 }
