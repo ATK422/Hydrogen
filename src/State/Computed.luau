@@ -5,6 +5,7 @@
 -- including through other computed state, which reads them on its behalf.
 
 local Store = require("./Store")
+local Log = require("../Log")
 
 export type Computed<T> = {
 	-- The current value, computed now.
@@ -57,7 +58,7 @@ local function recompute(self: Inner, ctx: any)
 
 	local ok, value = pcall(evaluate, self)
 	if not ok then
-		warn(`[HYDROGEN] Computed state failed: {value}`)
+		Log.warn(`[HYDROGEN] Computed state failed: {value}`)
 		return
 	end
 

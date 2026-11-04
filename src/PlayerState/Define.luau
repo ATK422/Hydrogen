@@ -12,6 +12,7 @@ local Network = require("../Network")
 local Store = require("../Data/Store")
 local Tables = require("../Data/Tables")
 local Data = require("../Data/Stores")
+local Log = require("../Log")
 
 export type Audience = Replication.Audience
 
@@ -52,7 +53,7 @@ local PlayerState = {}
 local function report(fn: (...any) -> (), ...: any)
 	local ok, err = xpcall(fn, debug.traceback, ...)
 	if not ok then
-		warn(`[HYDROGEN] PlayerState changed listener failed: {err}`)
+		Log.warn(`[HYDROGEN] PlayerState changed listener failed: {err}`)
 	end
 end
 

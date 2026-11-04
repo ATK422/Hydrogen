@@ -1,6 +1,7 @@
 --!strict
 
 local Tables = require("./Tables")
+local Time = require("../Clock")
 
 -- Which DataStore budget a request draws from.
 export type RequestKind = "update" | "read" | "write"
@@ -61,7 +62,7 @@ function Backend.memory(): MemoryBackend
 	-- Values are copied in and out, as a real store serializes them.
 	local function request(kind: RequestKind)
 		if backend.latency > 0 then
-			task.wait(backend.latency)
+			Time.wait(backend.latency)
 		end
 
 		backend.requests[kind] += 1

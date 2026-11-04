@@ -6,6 +6,8 @@ local Backend = require("./Backend")
 local Clock = require("./Clock")
 local Tables = require("./Tables")
 local gt = require("../../roblox_packages/gt")
+local Time = require("../Clock")
+local Log = require("../Log")
 
 type Backend = Backend.Backend
 type RequestKind = Backend.RequestKind
@@ -108,7 +110,7 @@ end
 local function report(fn: (...any) -> (), ...: any)
 	local ok, err = xpcall(fn, debug.traceback, ...)
 	if not ok then
-		warn(`[HYDROGEN] Data changed listener failed: {err}`)
+		Log.warn(`[HYDROGEN] Data changed listener failed: {err}`)
 	end
 end
 
@@ -243,7 +245,7 @@ function Store._request<T...>(self: Store, backend: Backend, kind: RequestKind, 
 
 		lastError = result
 		if attempt < attempts then
-			warn(`[HYDROGEN] Data store {self.name} {kind} request failed (attempt {attempt} of {attempts}), retrying: {result}`)
+			Log.warn(`[HYDROGEN] Data store {self.name} {kind} request failed (attempt {attempt} of {attempts}), retrying: {result}`)
 			Clock.wait(if self._closing then 0.5 else math.min(2 ^ (attempt - 1), 8))
 		end
 	end
@@ -357,12 +359,12 @@ function Store.load(self: Store, key: any, cancelled: (() -> boolean)?): (boolea
 
 	-- A player who rejoined quickly waits for their previous session to finish saving.
 	local existing = self._sessions[recordKey]
-	local began = os.clock()
+	local began = Time.now()
 	while existing and (existing.status == "loading" or existing.releasing or existing.owner ~= key) do
-		if os.clock() - began > (self._config.loadTimeout or LOAD_TIMEOUT) then
+		if Time.now() - began > (self._config.loadTimeout or LOAD_TIMEOUT) then
 			return false, `an earlier session for {self:_describe(key)} is still closing`
 		end
-		task.wait()
+		Time.wait()
 		existing = self._sessions[recordKey]
 	end
 	if existing then
@@ -383,7 +385,7 @@ function Store.load(self: Store, key: any, cancelled: (() -> boolean)?): (boolea
 		backend = backend,
 		version = 0,
 		savedVersion = 0,
-		lastAttempt = os.clock(),
+		lastAttempt = Time.now(),
 		lastWrite = Clock.now(),
 		once = {},
 		onceVersion = {},
@@ -468,7 +470,7 @@ function Store._acquire(self: Store, session: Session, cancelled: (() -> boolean
 			return false, `couldn't load {self:_describe(session.owner)}: {err}`
 		elseif outcome == "loaded" then
 			if takenOver then
-				warn(`[HYDROGEN] Data store {self.name}: took over {self:_describe(session.owner)}, whose lock was abandoned {takenOver}s ago`)
+				Log.warn(`[HYDROGEN] Data store {self.name}: took over {self:_describe(session.owner)}, whose lock was abandoned {takenOver}s ago`)
 			end
 			session.data = Tables.freeze(data)
 			session.lastWrite = Clock.now()
@@ -746,7 +748,7 @@ function Store._lost(self: Store, session: Session)
 		return
 	end
 	session.status = "lost"
-	warn(`[HYDROGEN] Data store {self.name}: another server took the lock on {self:_describe(session.owner)}; this server stops saving it`)
+	Log.warn(`[HYDROGEN] Data store {self.name}: another server took the lock on {self:_describe(session.owner)}; this server stops saving it`)
 	if self._config.onLost then
 		task.spawn(self._config.onLost, session.owner)
 	end
@@ -761,7 +763,7 @@ function Store._writeOne(self: Store, session: Session): (boolean, string?)
 	local once = table.clone(session.once)
 	local lost = false
 
-	session.lastAttempt = os.clock()
+	session.lastAttempt = Time.now()
 	local ok, err = self:_request(backend, "update", function()
 		return backend:update(self.name, session.key, function(record: Record?)
 			if not record or not record.lock or record.lock.id ~= session.lockId then
@@ -819,7 +821,7 @@ function Store._commitGroup(self: Store, group: Group): (boolean, string?)
 	for index, session in group.sessions do
 		local snapshot = snapshots[index]
 		local lost = false
-		session.lastAttempt = os.clock()
+		session.lastAttempt = Time.now()
 		local ok, err = self:_request(backend, "update", function()
 			return backend:update(self.name, session.key, function(record: Record?)
 				if not record or not record.lock or record.lock.id ~= session.lockId then
@@ -902,7 +904,7 @@ function Store._save(self: Store, session: Session): (boolean, string?)
 				end
 			end
 			if #usable < #group.sessions then
-				warn(`[HYDROGEN] Data store {self.name}: a transaction member lost its lock; saving the rest without it`)
+				Log.warn(`[HYDROGEN] Data store {self.name}: a transaction member lost its lock; saving the rest without it`)
 				group.sessions = usable
 				if #usable < 2 then
 					group.persisted = true
@@ -954,7 +956,7 @@ function Store.unload(self: Store, key: any)
 		return
 	end
 	while session.status == "loading" do
-		task.wait()
+		Time.wait()
 	end
 	if session.status == "closed" or self._sessions[recordKey] ~= session then
 		return
@@ -965,18 +967,18 @@ function Store.unload(self: Store, key: any)
 		if session.group and not session.group.persisted then
 			local ok, err = self:_save(session)
 			if not ok then
-				warn(`[HYDROGEN] Data store {self.name}: a transaction including {self:_describe(key)} couldn't be saved: {err}`)
+				Log.warn(`[HYDROGEN] Data store {self.name}: a transaction including {self:_describe(key)} couldn't be saved: {err}`)
 			end
 		end
 
 		-- A purchase being granted is stored before the lock goes.
 		while session.onceRunning > 0 do
-			task.wait()
+			Time.wait()
 		end
 		session.releasing = true
 		local ok, err = self:_save(session)
 		if not ok and session.status == "loaded" then
-			warn(`[HYDROGEN] Data store {self.name}: couldn't save {self:_describe(key)} on unload, changes since the last save are lost: {err}`)
+			Log.warn(`[HYDROGEN] Data store {self.name}: couldn't save {self:_describe(key)} on unload, changes since the last save are lost: {err}`)
 		end
 	end
 
@@ -1003,7 +1005,7 @@ function Store._startAutosave(self: Store)
 	task.spawn(function()
 		while next(self._sessions) and not self._closing do
 			Clock.wait(tick)
-			local now = os.clock()
+			local now = Time.now()
 			for _, session in table.clone(self._sessions) do
 				if session.status ~= "loaded" or session.busy or now - session.lastAttempt < interval then
 					continue
@@ -1014,7 +1016,7 @@ function Store._startAutosave(self: Store)
 					task.spawn(function()
 						local ok, err = self:_save(session)
 						if not ok and session.status == "loaded" then
-							warn(`[HYDROGEN] Data store {self.name}: autosave of {self:_describe(session.owner)} failed: {err}`)
+							Log.warn(`[HYDROGEN] Data store {self.name}: autosave of {self:_describe(session.owner)} failed: {err}`)
 						end
 					end)
 				end
@@ -1041,7 +1043,7 @@ function Store.close(self: Store)
 		end)
 	end
 	while remaining > 0 do
-		task.wait()
+		Time.wait()
 	end
 end
 
@@ -1055,8 +1057,8 @@ end
 function Store.waitForLoad(self: Store, key: any, timeout: number?): boolean
 	local recordKey = self._config.keyOf(key)
 	local limit = timeout or ((self._config.loadTimeout or LOAD_TIMEOUT) + 30)
-	local began = os.clock()
-	while os.clock() - began < limit do
+	local began = Time.now()
+	while Time.now() - began < limit do
 		local session = self._sessions[recordKey]
 		if session and session.status ~= "loading" then
 			return session.status == "loaded" and not session.releasing
@@ -1064,7 +1066,7 @@ function Store.waitForLoad(self: Store, key: any, timeout: number?): boolean
 		if not session and (type(key) ~= "table" or key.Parent == nil) then
 			return false
 		end
-		task.wait()
+		Time.wait()
 	end
 	return false
 end
@@ -1111,7 +1113,7 @@ function Store.placeholder(self: Store, key: any)
 		backend = self._config.backend(),
 		version = 0,
 		savedVersion = 0,
-		lastAttempt = os.clock(),
+		lastAttempt = Time.now(),
 		lastWrite = Clock.now(),
 		once = {},
 		onceVersion = {},

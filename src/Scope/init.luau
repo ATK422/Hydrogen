@@ -2,6 +2,9 @@
 -- Instances, functions, other scopes) and undoes it all, newest first, when it's destroyed.
 -- Apps give every system a scope and a scope per player; Scope.new makes your own.
 
+local Clock = require("./Clock")
+local Log = require("./Log")
+
 export type Scope = {
 	-- False once destroyed. Anything added to a destroyed scope is cleaned right away, so work
 	-- that finishes after its player left (a DataStore load, a delay) can't leak.
@@ -46,10 +49,10 @@ local metatable = { __index = Methods }
 -- Systems running in an app -> that app's lookup. Weak, so systems from finished tests can be collected.
 local owners: { [any]: Owner } = setmetatable({}, { __mode = "k" }) :: any
 
--- Time source, so a test harness can swap in a fake clock (Scope._clock.delay). Same contract as task.delay.
+-- Time source: Hydrogen.Clock, looked up at call time so the harness's fake clock reaches it.
 local clock = {
 	delay = function(seconds: number, thread: thread, ...: any): thread
-		return task.delay(seconds, thread, ...)
+		return Clock.delay(seconds, thread, ...)
 	end,
 }
 
@@ -119,9 +122,9 @@ local function cleanSafely(scope: Internal, task: any)
 	local ok, err = xpcall(clean, debug.traceback, task)
 	if not ok then
 		if scope.name then
-			warn(`[HYDROGEN] Cleanup failed in scope {scope.name}: {err}`)
+			Log.warn(`[HYDROGEN] Cleanup failed in scope {scope.name}: {err}`)
 		else
-			warn(`[HYDROGEN] Scope cleanup failed: {err}`)
+			Log.warn(`[HYDROGEN] Scope cleanup failed: {err}`)
 		end
 	end
 end

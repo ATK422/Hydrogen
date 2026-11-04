@@ -9,6 +9,7 @@ local Clock = require("./Clock")
 local Log = require("./Log")
 local Network = require("./Network")
 local Runtime = require("./Network/Runtime")
+local State = require("./State")
 local Expect = require("@self/Expect")
 
 export type Expectation = Expect.Expectation
@@ -351,6 +352,8 @@ function Testing.harness(options: TestOptions?): Harness
 				self.net:close()
 			end)
 		end
+		-- State values are module singletons; the next test starts from their initial values.
+		step(State.reset)
 		if Runtime.Observer == record then
 			Runtime.Observer = nil
 		end

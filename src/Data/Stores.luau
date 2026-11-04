@@ -10,6 +10,7 @@ local Clock = require("./Clock")
 local Store = require("./Store")
 local Definition = require("../Definition")
 local Network = require("../Network")
+local Log = require("../Log")
 
 export type Backend = Backend.Backend
 export type MemoryBackend = Backend.MemoryBackend
@@ -153,7 +154,7 @@ local function config(name: string, options: StoreOptions<any>, keyOf: (any) -> 
 end
 
 local function kick(player: Player, message: string)
-	warn(`[HYDROGEN] {message}`)
+	Log.warn(`[HYDROGEN] {message}`)
 	pcall(function()
 		player:Kick("Your data couldn't be loaded. Please rejoin in a moment.")
 	end)

@@ -6,6 +6,7 @@
 -- whole list is smaller, so it is sent instead.
 
 local Store = require("./Store")
+local Log = require("../Log")
 
 type Def = Store.Def
 type Cell = Store.Cell
@@ -97,7 +98,7 @@ function List.apply(state: Def, ctx: any, cell: Cell, reset: boolean, ops: { num
 		elseif op == REMOVE and index >= 1 and index <= count then
 			table.remove(data, index)
 		else
-			warn(`[HYDROGEN] State {state.name} received a list change that doesn't fit the list (op {op} at {index} of {count}); the rest was ignored`)
+			Log.warn(`[HYDROGEN] State {state.name} received a list change that doesn't fit the list (op {op} at {index} of {count}); the rest was ignored`)
 			break
 		end
 	end

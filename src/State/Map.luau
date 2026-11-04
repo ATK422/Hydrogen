@@ -5,6 +5,7 @@
 -- With reset, keys/values are the whole map and replace what the client had.
 
 local Store = require("./Store")
+local Log = require("../Log")
 
 type Def = Store.Def
 type Cell = Store.Cell
@@ -90,7 +91,7 @@ end
 
 function Map.apply(state: Def, ctx: any, cell: Cell, reset: boolean, keys: { any }, values: { any }, removed: { any })
 	if #keys ~= #values then
-		warn(`[HYDROGEN] State {state.name} received a map change with {#keys} keys and {#values} values; ignored`)
+		Log.warn(`[HYDROGEN] State {state.name} received a map change with {#keys} keys and {#values} values; ignored`)
 		return
 	end
 

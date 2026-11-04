@@ -9,6 +9,7 @@ local RunService = game:GetService("RunService")
 
 local Runtime = require("../Network/Runtime")
 local Schedule = require("./Schedule")
+local Log = require("../Log")
 
 export type Cell = {
 	-- The value, map table or list table.
@@ -278,7 +279,7 @@ local function runObserver(name: string, observer: (...any) -> (), ...: any)
 	freeThread = nil
 	local ok, err = xpcall(observer, debug.traceback, ...)
 	if not ok then
-		warn(`[HYDROGEN] Observer of State {name} failed: {err}`)
+		Log.warn(`[HYDROGEN] Observer of State {name} failed: {err}`)
 	end
 	freeThread = acquired
 end
@@ -379,7 +380,7 @@ local function send(state: Def, cell: Cell, targets: { Player }, ...: any)
 		then pcall(state.event.Fire, state.event, targets, cell.userId, ...)
 		else pcall(state.event.Fire, state.event, targets, ...)
 	if not ok then
-		warn(`[HYDROGEN] State {state.name} could not be sent: {err}`)
+		Log.warn(`[HYDROGEN] State {state.name} could not be sent: {err}`)
 	end
 end
 
@@ -443,7 +444,7 @@ local function unsubscribe(player: Player)
 	if leftEvent and #subscribers > 0 then
 		local ok, err = pcall(leftEvent.Fire, leftEvent, table.clone(subscribers), player.UserId)
 		if not ok then
-			warn(`[HYDROGEN] State could not tell clients that {player.Name} left: {err}`)
+			Log.warn(`[HYDROGEN] State could not tell clients that {player.Name} left: {err}`)
 		end
 	end
 end

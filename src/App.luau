@@ -4,6 +4,8 @@ local RunService = game:GetService("RunService")
 local Network = require("./Network")
 local Definition = require("./Definition")
 local Scope = require("./Scope")
+local Clock = require("./Clock")
+local Log = require("./Log")
 
 type System = Definition.Lifecycle
 type Scope = Scope.Scope
@@ -77,12 +79,12 @@ local function collectSystems(container: Instance): { System }
 		if type(system) == "table" and system.id then
 			table.insert(systems, system)
 		else
-			warn(`[HYDROGEN] Tried to collect "system" but it was not a valid system: {module:GetFullName()}`)
+			Log.warn(`[HYDROGEN] Tried to collect "system" but it was not a valid system: {module:GetFullName()}`)
 		end
 	end
 
 	if #systems == 0 then
-		warn(`[HYDROGEN] addSystemsFolders found no systems in {container:GetFullName()}`)
+		Log.warn(`[HYDROGEN] addSystemsFolders found no systems in {container:GetFullName()}`)
 	end
 
 	return systems
@@ -116,7 +118,7 @@ local function runHook(system: System, hook: "playerAdded" | "playerRemoving" | 
 
 	local ok, err = xpcall(callback, debug.traceback, system, ...)
 	if not ok then
-		warn(`[HYDROGEN] {hook} failed in system {Definition.describe(system)}: {err}`)
+		Log.warn(`[HYDROGEN] {hook} failed in system {Definition.describe(system)}: {err}`)
 	end
 end
 
@@ -179,7 +181,7 @@ function App:addNetwork(...: Instance)
 
 		-- Usually the wrong instance was passed; the names would then be missing on this side only.
 		if found == 0 then
-			warn(`[HYDROGEN] addNetwork found no network objects in {container:GetFullName()}`)
+			Log.warn(`[HYDROGEN] addNetwork found no network objects in {container:GetFullName()}`)
 		end
 	end
 end
@@ -313,7 +315,7 @@ function App:stop()
 	end
 
 	while self._removing > 0 do
-		task.wait()
+		Clock.wait()
 	end
 
 	for index = #self._ordered, 1, -1 do
@@ -455,7 +457,7 @@ function App:_removePlayer(player: Player)
 	self._removing += 1
 
 	while not state.added do
-		task.wait()
+		Clock.wait()
 	end
 
 	for index = #self._ordered, 1, -1 do
