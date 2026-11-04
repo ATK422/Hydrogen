@@ -24,7 +24,13 @@ function Tools.exec(program: string, args: { string }, cwd: string?, inherit: bo
 		stdio = if inherit then "inherit" else "default",
 	} :: any)
 	if not ok then
-		if string.find(tostring(result), "not found", 1, true) then
+		-- Windows: Lune's own "program not found". macOS / Linux: the OS error for a missing file.
+		local message = tostring(result)
+		if
+			string.find(message, "not found", 1, true)
+			or string.find(message, "No such file or directory", 1, true)
+			or string.find(message, "os error 2)", 1, true)
+		then
 			return nil
 		end
 		return { ok = false, code = -1, stdout = "", stderr = tostring(result) }

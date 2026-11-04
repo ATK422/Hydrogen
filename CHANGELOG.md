@@ -4,6 +4,10 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 
 ## Unreleased
 
+### Fixed
+
+- `create_hydrogen` 0.1.1: on macOS and Linux, a missing git, Rokit or pesde is reported with its install instructions. 0.1.0 only recognized Windows' "program not found" and treated the tool as installed but failing.
+
 ## 0.5.0
 
 ### Added
