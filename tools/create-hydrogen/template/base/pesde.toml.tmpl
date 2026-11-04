@@ -1,0 +1,35 @@
+name = "{{package}}"
+version = "0.1.0"
+description = "{{description_toml}}"
+{{#if has_author}}
+authors = ["{{author_toml}}"]
+{{/if}}
+{{#if has_license}}
+license = "{{license}}"
+{{/if}}
+# A game, not a library: pesde won't publish it.
+private = true
+
+[target]
+environment = "roblox"
+build_files = ["src"]
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[scripts]
+roblox_sync_config_generator = ".pesde/scripts/roblox_sync_config_generator.luau"
+sourcemap_generator = ".pesde/scripts/sourcemap_generator.luau"
+test = "test/run.luau"
+
+[dependencies]
+hydrogen = { name = "atk422/hydrogen", version = "{{hydrogen_version}}" }
+
+[dev_dependencies]
+scripts = { name = "pesde/scripts_rojo", version = "{{scripts_rojo_version}}", target = "lune" }
+rojo = { name = "pesde/rojo", version = "{{rojo_package_version}}", target = "lune" }
+frktest = { name = "itsfrank/frktest", version = "{{frktest_version}}", target = "luau" }
+
+[engines]
+pesde = "{{pesde_engine}}"
+lune = "{{lune_engine}}"

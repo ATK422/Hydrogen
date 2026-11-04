@@ -23,3 +23,7 @@ jobs:
       # pesde run hands off to a `lune` executable, so the setup step must install Lune.
       - name: Run tests
         run: pesde run test
+
+      - name: Test the project generator
+        working-directory: tools/create-hydrogen
+        run: lune run test/run

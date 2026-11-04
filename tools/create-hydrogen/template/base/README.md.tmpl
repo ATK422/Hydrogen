@@ -1,0 +1,97 @@
+# {{name}}
+
+{{description}}
+
+Built with [Hydrogen](https://github.com/ATK422/Hydrogen), synced into Studio with [Rojo](https://rojo.space).
+
+## Setup
+
+You need [Rokit](https://github.com/rojo-rbx/rokit) (it installs Rojo, pesde, Lune and the other tools at the versions in `rokit.toml`).
+
+```bash
+rokit install
+pesde install
+```
+
+Then open the folder in VS Code and install the recommended extensions when it asks.
+
+## Everyday commands
+
+| Command | What it does |
+| --- | --- |
+| `rojo serve` | Sync the project into Studio (open the Rojo plugin and click Connect) |
+| `rojo build -o game.rbxl` | Build a place file |
+| `pesde run test` | Run the tests in `test/` under Lune |
+{{#if stylua}}
+| `stylua src test` | Format the code |
+{{/if}}
+{{#if selene}}
+| `selene src test` | Lint the code |
+{{/if}}
+| `pesde add <scope/name>` then `pesde install` | Add a package |
+
+## Layout
+
+```
+src/
+  server/                  -> ServerScriptService.Server
+    Main.server.luau       boots the server app
+    Systems/               every system here is started by Main.server.luau
+{{#if examples}}
+      Visits.luau          example: player hooks
+      Greeter.luau         example: use(...) and a network listener
+{{/if}}
+{{#unless examples}}
+      Game.luau            an empty system to start from
+{{/unless}}
+  client/                  -> StarterPlayer.StarterPlayerScripts.Client
+    Main.client.luau       boots the client app
+    Systems/
+{{#if examples}}
+      Greetings.luau       example: says hello, prints the reply
+{{/if}}
+{{#unless examples}}
+      Interface.luau       an empty system to start from
+{{/unless}}
+{{#if examples}}
+  shared/                  -> ReplicatedStorage.Shared
+    Network/               network objects, registered by both Main scripts
+      Greeting.luau        example: a client event and a server event
+{{/if}}
+{{#unless examples}}
+  shared/                  -> ReplicatedStorage.Shared (create it when you need it)
+{{/unless}}
+test/
+  run.luau                 `pesde run test`: runs every *.test.luau
+  Roblox.luau              loads game code under Lune through the Rojo sourcemap
+{{#if examples}}
+  Greeter.test.luau        example tests with Hydrogen.loopback() and app:replace
+{{/if}}
+default.project.json       Rojo project: maps src/ into the DataModel
+pesde.toml                 packages (Hydrogen) and the `test` script
+rokit.toml                 pinned tool versions
+```
+
+Packages install to `roblox_packages/`, which Rojo maps to `ReplicatedStorage.roblox_packages`, so game code requires Hydrogen with `require(ReplicatedStorage.roblox_packages.hydrogen)`.
+
+## Systems and the network
+
+A system is a ModuleScript under `Systems/` that returns `Hydrogen.define(...)`. `use(OtherSystem)` declares a dependency, so `OtherSystem` starts first. Hooks: `init`, `start`, `playerAdded`, `playerRemoving` and `stop`, all optional.
+
+Network objects live in shared modules under `src/shared/Network/`. Both Main scripts register the same folder with `app:addNetwork`, because the server and client must register the same names. Every payload is checked against its GreenTea schema (`Hydrogen.gt`).
+
+The [Hydrogen README](https://github.com/ATK422/Hydrogen#readme) covers the whole API: middleware, rate limiting, batching, buffer encoding and testing.
+
+## Tests
+
+`pesde run test` runs every file ending in `.test.luau` under `test/`, with [frktest](https://github.com/itsfrank/frktest). Tests require game code through the DataModel, as game code does: `require(game:GetService("ServerScriptService").Server.Systems.Greeter)`. `test/Roblox.luau` builds that DataModel from the Rojo sourcemap (`rojo sourcemap`), so Rojo has to be installed.
+
+- `Hydrogen.loopback()` stands in for the remotes: `net:join("Alice")` adds a fake player, and server and client systems talk in one VM.
+- `app:replace(System, fake)` swaps a dependency for a fake while the app runs.
+- Stop each app and close each loopback at the end of a test (`test.on_test_leave`).
+{{#if ci}}
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request: it installs the tools from `rokit.toml`, installs packages from `pesde.lock`, builds the place, runs the tests{{#if lint}} and checks the code with the lint tools{{/if}}. Commit `pesde.lock` so CI installs the same versions you do.
+{{/if}}
