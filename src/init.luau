@@ -1,6 +1,8 @@
 local Definition = require("@self/Definition")
 local App = require("@self/App")
 local Network = require("@self/Network")
+local Clock = require("@self/Clock")
+local Testing = require("@self/Testing")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -22,6 +24,13 @@ export type RateLimitOptions = Network.RateLimitOptions
 export type Namespace = Network.Namespace
 export type Loopback = Network.Loopback
 
+export type Harness = Testing.Harness
+export type TestOptions = Testing.TestOptions
+export type Expectation = Testing.Expectation
+export type Delivery = Testing.Delivery
+export type FakeClock = Clock.FakeClock
+export type FakeClockOptions = Clock.FakeClockOptions
+
 return {
 	App = App,
 	define = Definition.define,
@@ -35,6 +44,12 @@ return {
 	rateLimit = Network.rateLimit,
 	-- Headless tests: this VM plays the server and fake clients, without real remotes.
 	loopback = Network.loopback,
+	-- One call per test: loopback, fake clock, app, fakes and players, always torn down.
+	test = Testing.test,
+	-- The same harness for frameworks with setup/teardown hooks; call t:close() yourself.
+	harness = Testing.harness,
+	-- Time for Hydrogen and kit modules: Clock.now(), wait, delay, heartbeat; Clock.fake() in tests.
+	Clock = Clock,
 	-- Return this from a middleware to stop the message.
 	DROP = Network.DROP,
 	-- The GreenTea instance Hydrogen validates with, so schemas always match its version.

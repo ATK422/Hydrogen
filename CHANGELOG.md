@@ -2,6 +2,29 @@
 
 All notable changes to Hydrogen are listed here. Versions follow [Semantic Versioning](https://semver.org); while the version is `0.x`, a minor bump can contain breaking changes.
 
+## Unreleased
+
+### Added
+
+- `Hydrogen.test(options?, fn)`: one call per test. It opens a loopback, installs a fake clock, builds and starts an app from `systems`, applies `replace` fakes, joins `players` (passed to `fn` after the harness), runs `fn`, and always tears down: stops the app, closes the loopback and restores the clock, even when `fn` or the boot errors. `start = false` leaves setup to the test (`t:add`, `t:replace`, `t:join`, `t:start`).
+- `Hydrogen.harness(options?)`: the same harness without the function, for frameworks with setup and teardown hooks; call `t:close()`. A harness left open is closed, with a warning, when the next one opens.
+- Expectations on what network objects delivered: `t:expect(object)` with `fired`, `firedTo`, `firedBy`, `notFired`, `firedTimes`, `called`, `calledBy`, `returned`, `notCalled`, `calledTimes` and `deliveries`, plus `t:expectNothingFired()`. Arguments compare by value, `t.any` matches any value, and a failure errors at the test line with what was delivered instead. They work with frktest, TestEZ, Jest-Lua or no framework.
+- Warning capture in the harness: `t:expectWarning(text)`, `t:expectNoWarnings()` and `t:warnings()`. Warnings no expectation matched are printed when the test ends.
+- `Hydrogen.Clock`: `now`, `time`, `wait`, `delay`, `cancel` and `heartbeat`, which are the built-ins in a game, and `Clock.fake(options?)`, a controllable clock (`advance`, `next`, `pending`, `restore`). The harness installs one, so timeouts, rate-limit refills and timers in systems run deterministically with `t:advance(seconds)`.
+- `src/Testing/Lune.luau`: the Lune runtime Hydrogen's tests run on, shipped so games can run system tests under Lune. `Lune.install()` sets the Roblox globals; `Lune.require` loads modules with Roblox require rules, `.luaurc` aliases, pesde package links and `require(script...)`, and names them like Roblox full names so inferred system ids match Studio.
+- Types `Harness`, `TestOptions`, `Expectation`, `Delivery`, `FakeClock` and `FakeClockOptions`.
+
+### Changed
+
+- The network reads time through `Hydrogen.Clock` (the server function timeout, the rate limiter's refill, the batching flush) and warns through an internal log, so tests can fake and capture them. Nothing changes in a game.
+- Under loopback, `net:client()` is `nil` while the server handles a client's message. It used to return the sending client.
+- Opening a loopback always starts from an empty network, so events an earlier test queued are dropped instead of reaching the new test's clients.
+- The test runner runs on the shipped Lune runtime. GreenTea now loads through its own `init`, as in Roblox, instead of the runner loading its inner module directly.
+
+### Fixed
+
+- `Hydrogen.rateLimit` no longer locks a player out when the clock it reads moves backwards (e.g. a bucket made before a test's fake clock was installed).
+
 ## 0.4.0
 
 ### Added

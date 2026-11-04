@@ -1,5 +1,7 @@
 --!strict
 
+local Clock = require("../Clock")
+
 export type Kind = "ClientEvent" | "ServerEvent" | "ClientFunction" | "ServerFunction"
 
 export type Context = {
@@ -174,7 +176,8 @@ local function formatValue(value: any, depth: number): string
 	return `\{{table.concat(parts, ", ")}}`
 end
 
-local function formatArgs(...: any): string
+-- Values as the logger prints them, e.g. "hello", 10, {...}.
+function Middleware.format(...: any): string
 	local parts = {}
 	for index = 1, select("#", ...) do
 		table.insert(parts, formatValue((select(index, ...)), 0))
@@ -218,7 +221,7 @@ function Middleware.rateLimit(options: RateLimitOptions): AnyMiddleware
 			return ...
 		end
 
-		local now = os.clock()
+		local now = Clock.now()
 		local perPlayer = buckets[player]
 		if not perPlayer then
 			perPlayer = {}
@@ -231,7 +234,8 @@ function Middleware.rateLimit(options: RateLimitOptions): AnyMiddleware
 			perPlayer[context.name] = bucket
 		end
 
-		bucket.tokens = math.min(burst, bucket.tokens + (now - bucket.at) * perSecond)
+		-- max guards a bucket made under another clock (a test's fake clock came or went).
+		bucket.tokens = math.min(burst, bucket.tokens + math.max(now - bucket.at, 0) * perSecond)
 		bucket.at = now
 
 		if bucket.tokens < 1 then
@@ -259,7 +263,7 @@ function Middleware.logger(options: LoggerOptions?): AnyMiddleware
 		local arrow = if context.direction == "outgoing" then "->" else "<-"
 		local payload = if context.payload == "event" then "" else ` {context.payload}`
 
-		output(`[HYDROGEN] {arrow} {context.name}{payload}{formatPeer(context)}: {formatArgs(...)}`)
+		output(`[HYDROGEN] {arrow} {context.name}{payload}{formatPeer(context)}: {Middleware.format(...)}`)
 		return ...
 	end
 end

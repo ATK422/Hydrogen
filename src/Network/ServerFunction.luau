@@ -31,6 +31,7 @@ function ServerFunction.new<A...>(name: string, ...: A...): ServerFunctionBuilde
 		local fn = {} :: ServerFunction<A..., R...>
 
 		fn._name = name
+		fn._kind = "ServerFunction"
 		fn._requestMiddleware = {}
 		fn._responseMiddleware = {}
 		fn._callback = nil
@@ -40,12 +41,16 @@ function ServerFunction.new<A...>(name: string, ...: A...): ServerFunctionBuilde
 		fn._argsCodec = nil
 		fn._returnsCodec = nil
 
+		local function handle(_player: Player?, ...: any): ...any
+			return fn._returnsSchema:assert((fn._callback :: any)(...))
+		end
+
 		-- Runs on the client.
 		local function respond(...: any): ...any
 			return Codec.encodeWith(fn._returnsCodec, Middleware.unlessDropped(name, "response", Middleware.run(
 				fn._responseMiddleware,
 				"ServerFunction", name, "outgoing", "response", nil, nil,
-				fn._returnsSchema:assert((fn._callback :: any)(fn._argsSchema:assert(...)))
+				Runtime:observeCall("ServerFunction", name, Runtime:loopbackClient(), handle, fn._argsSchema:assert(...))
 			)))
 		end
 

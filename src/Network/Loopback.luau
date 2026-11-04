@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
+local Log = require("../Log")
 local Middleware = require("./Middleware")
 local Runtime = require("./Runtime")
 
@@ -15,7 +16,8 @@ export type Loopback = {
 	players: (self: Loopback) -> { Player },
 	-- Runs fn as that client: client events and functions fired inside it come from player.
 	as: (self: Loopback, player: Player, fn: (...any) -> ...any, ...any) -> ...any,
-	-- The client the running code acts as: inside as, or while a server message is delivered to it.
+	-- The client the running code acts as: inside as, or while a server message is delivered to
+	-- it. nil while the server handles a client's message.
 	client: (self: Loopback) -> Player?,
 	-- Removes the remaining players, undoes listeners and middleware added since the loopback
 	-- was created, and stops the network so the next test can start it again.
@@ -59,7 +61,7 @@ end
 local function deliver(callback: (...any) -> (), ...: any)
 	local ok, err = xpcall(callback, debug.traceback, ...)
 	if not ok then
-		warn(`[HYDROGEN] Loopback event handler failed: {err}`)
+		Log.warn(`[HYDROGEN] Loopback event handler failed: {err}`)
 	end
 end
 
@@ -132,13 +134,12 @@ function Loopback.new(): Loopback
 	if Runtime.Loopback then
 		error(`[HYDROGEN] A loopback is already open; close it before opening another`, 2)
 	end
-	if Runtime.Initialized then
-		if RunService:IsServer() or RunService:IsClient() then
-			error(`[HYDROGEN] Open the loopback before app:start(); the network is already running`, 2)
-		end
-		-- Headless, an earlier app started a network with no remotes, so nothing is using it.
-		disconnect()
+	if Runtime.Initialized and (RunService:IsServer() or RunService:IsClient()) then
+		error(`[HYDROGEN] Open the loopback before app:start(); the network is already running`, 2)
 	end
+	-- Start from an empty network: headless, an earlier app may have started one with no
+	-- remotes, and events an earlier test queued would otherwise reach this test's clients.
+	disconnect()
 
 	local loopback = {} :: Loopback
 	local players: { Player } = {}
@@ -176,6 +177,20 @@ function Loopback.new(): Loopback
 		return table.unpack(args, 1, args.n)
 	end
 
+	-- While the server handles a message, code is running as the server, not as the client
+	-- that sent it, so client() is nil there.
+	local function asServer(fn: (...any) -> ...any, ...: any): ...any
+		local previous = current
+		current = nil
+		local results = table.pack(pcall(fn, ...))
+		current = previous
+
+		if not results[1] then
+			error(results[2], 0)
+		end
+		return table.unpack(results, 2, results.n)
+	end
+
 	local function sender(): Player
 		if current then
 			return current
@@ -194,7 +209,7 @@ function Loopback.new(): Loopback
 		}
 
 		function remote:FireServer(...: any)
-			fire(remote.OnServerEvent, sender(), copyArgs(...))
+			asServer(fire, remote.OnServerEvent, sender(), copyArgs(...))
 		end
 
 		-- A player who left gets nothing, as with a real remote.
@@ -218,7 +233,7 @@ function Loopback.new(): Loopback
 		if not callback then
 			error(`[HYDROGEN] Loopback server has no OnServerInvoke; is the network started?`, 0)
 		end
-		return copyArgs(callback(sender(), copyArgs(...)))
+		return copyArgs(asServer(callback, sender(), copyArgs(...)))
 	end
 
 	function remoteFunction:InvokeClient(player: Player, ...: any): ...any
