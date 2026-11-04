@@ -4,6 +4,8 @@ local Network = require("@self/Network")
 local Clock = require("@self/Clock")
 local Testing = require("@self/Testing")
 local Scope = require("@self/Scope")
+local Data = require("@self/Data")
+local PlayerState = require("@self/PlayerState")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -33,6 +35,13 @@ export type Delivery = Testing.Delivery
 export type FakeClock = Clock.FakeClock
 export type FakeClockOptions = Clock.FakeClockOptions
 
+export type PlayerStore<T> = Data.PlayerStore<T>
+export type KeyStore<T> = Data.KeyStore<T>
+export type DataBackend = Data.Backend
+export type MemoryBackend = Data.MemoryBackend
+export type UpdateOnceResult = Data.UpdateOnceResult
+export type PlayerState<S> = PlayerState.PlayerState<S>
+
 return {
 	App = App,
 	define = Definition.define,
@@ -58,4 +67,8 @@ return {
 	gt = gt,
 	-- Cleanup tied to a lifetime: Scope.new(), or Scope.of(system, player?) for an app's scopes.
 	Scope = Scope,
+	-- Session-locked DataStore persistence: Data.player, Data.store, Data.memory.
+	Data = Data,
+	-- Per-player state from Data or runtime, replicated per field: PlayerState.new.
+	PlayerState = PlayerState,
 }

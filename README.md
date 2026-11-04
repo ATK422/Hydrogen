@@ -61,9 +61,11 @@ Hydrogen.harness        -- the same harness for frameworks with setup/teardown h
 Hydrogen.Clock          -- time for systems and tests: Clock.now(), wait, delay, heartbeat, fake()
 Hydrogen.gt             -- GreenTea, for writing schemas
 Hydrogen.Scope          -- cleanup tied to lifetimes: Scope.new(), Scope.of(system, player?)
+Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Data.store, Data.memory
+Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -524,6 +526,206 @@ What `app:start()` does, in order:
 - Middleware added after a message is queued does not run on it; add middleware before firing anything.
 - With batching on, events go out on `Heartbeat`, at the end of the frame they were fired in. A function call first sends the events already waiting for its target.
 
+### Saving data with `Hydrogen.Data`
+
+Declare a store once. It is a system, so add it to the app like any other:
+
+```luau
+-- ReplicatedStorage/State/PlayerData.luau
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local gt = Hydrogen.gt
+
+return Hydrogen.Data.player("PlayerData", {
+	template = { coins = 0, inventory = {} :: { string } },
+	schema = gt.table({
+		coins = gt.number({ integer = true, range = "[0, inf]" }),
+		inventory = gt.array(gt.string()),
+	}),
+})
+```
+
+Systems that `use` it see the player's data already loaded in their own `playerAdded`:
+
+```luau
+return Hydrogen.define(function(use)
+	local PlayerData = use(require(ReplicatedStorage.State.PlayerData))
+	local Shop = {}
+
+	function Shop:playerAdded(player: Player)
+		print(PlayerData:get(player).coins) -- loaded, no waiting
+	end
+
+	function Shop.buy(player: Player, item: string, price: number): boolean
+		return PlayerData:update(player, function(data)
+			if data.coins < price then
+				return false -- abort: nothing changes
+			end
+			data.coins -= price
+			table.insert(data.inventory, item)
+		end)
+	end
+
+	return Shop
+end)
+```
+
+That is the whole setup. The store loads each player in `playerAdded`, saves and releases them in `playerRemoving`, autosaves, and flushes everything in `stop` (bound to `BindToClose`).
+
+| Method | What it does |
+| --- | --- |
+| `store:get(player)` | The loaded data. It is deep-frozen; change it with `update`. Errors if not loaded. |
+| `store:find(player)` / `store:isLoaded(player)` | `get` without the error, and whether the load succeeded. |
+| `store:waitForLoad(player, timeout?)` | Yields until the player's load finishes (or, if it hasn't started, while they're in the game). Returns whether it loaded. |
+| `store:update(player, fn)` | Runs `fn` on a copy, checks the result against the schema and commits it in one step. Return `false` to abort. Returns whether it committed. |
+| `store:save(player)` | Saves now and yields until stored. Returns `ok, err`. Saves already running are joined, not repeated. |
+| `store:transaction({ a, b }, fn)` | Changes several players all-or-nothing, for trades. `fn` gets `{ [player]: data }`. |
+| `store:updateOnce(player, id, fn)` | `update` that runs once per `id` and returns after it is stored. For purchase receipts. |
+| `store:changed(fn)` | `fn(player, data, old)` after every commit. Returns a disconnect function. |
+| `store:view(userId)` | Reads someone's saved data without locking it (an offline profile). Yields. |
+
+Options (only `template` is required):
+
+- `schema`: a GreenTea schema. Without one, Hydrogen derives it from the template (`gt.typeof`), which is enough for flat data; write one for arrays and ranges.
+- `migrations`: a list run in order on data saved before it existed: `function(old) return new end`, or `{ migrate = fn, backwardsCompatible = true }` when servers that don't know the migration can still read its result.
+- `autosave` (seconds, default 120), `lockTimeout` (600), `loadTimeout` (30), `retries` (5).
+- `key = function(userId) return "Player_" .. userId end` to match keys from an older save system. Defaults to `tostring(userId)`.
+- `onLoadFailed = function(player, message) end`: defaults to kicking the player with a message.
+- `backend`: where records go (see [Backends](#backends-and-tests)).
+
+#### Purchases: `updateOnce`
+
+```luau
+local result = PlayerData:updateOnce(player, receiptInfo.PurchaseId, function(data)
+	data.coins += 100
+end)
+-- "applied" or "duplicate": the grant is stored, return PurchaseGranted
+-- "aborted" or "failed":    return NotProcessedYet; Roblox asks again later
+```
+
+The id is recorded in the same commit as the change, in the record's own metadata (the last 100 ids are kept), and `updateOnce` only reports success once a save holding both has gone through. If the save fails, the grant stays in memory without being repeated, and the next call for that id saves before answering `"duplicate"`. A player leaving waits for a grant that is still saving; once their data is being released, `updateOnce` answers `"failed"` so the purchase is granted on their next server.
+
+#### Trades: `transaction`
+
+```luau
+PlayerData:transaction({ seller, buyer }, function(all)
+	local item = table.remove(all[seller].inventory, index)
+	if not item or all[buyer].coins < price then
+		return false
+	end
+	all[buyer].coins -= price
+	all[seller].coins += price
+	table.insert(all[buyer].inventory, item)
+end)
+```
+
+The change applies to both players at once in memory, and is saved right away with a two-phase commit (as in Lyra): a pending marker is written, then each record with the transaction's id and its previous data, then the marker is removed. A server that loads a record whose marker still exists uses the previous data, so a crash mid-trade stores either both sides or neither. Until that commit succeeds, those players are saved together and never one at a time.
+
+#### Data that isn't a player's
+
+`Hydrogen.Data.store(name, options)` has the same methods keyed by string, plus `load(key)` and `unload(key)`. Load a key before using it; whatever is still loaded is saved and released when the app stops.
+
+```luau
+local Guilds = Hydrogen.Data.store("Guilds", { template = { members = {} :: { number }, bank = 0 } })
+
+local ok, err = Guilds:load(guildId) -- yields; session-locked like player data
+Guilds:update(guildId, function(guild) guild.bank += 50 end)
+Guilds:unload(guildId)
+```
+
+#### Backends and tests
+
+On a server, stores use Roblox DataStores. Under Lune, and under `Hydrogen.loopback()` (in Studio too), they use an in-memory backend, so tests and headless runs never touch real data. `Hydrogen.Data.useBackend(Hydrogen.Data.memory())` makes every store use memory, for example in Studio without API access; a `backend` option overrides it for one store. A backend is any table with `update`, `read`, `write` and `budget` (see `Hydrogen.DataBackend`).
+
+The memory backend has test controls: `backend:fail(count, kind?)` makes the next requests error, `backend:setBudget(kind, amount)` simulates throttling, `backend.latency` delays each request, and `backend:peek(store, key)` returns what is stored. `Hydrogen.Data.Clock` holds the time sources (`now`, `wait`) so a test or a fake clock can replace them.
+
+Rules:
+
+- **Data stores do nothing on clients.** Defining one in a shared module is safe (and lets a shared `PlayerState` use it); the client's copy never loads or saves.
+- **`update` callbacks must not yield**, so no other change can slip in between reading and writing. A yield errors and nothing changes.
+- **An `update` called inside another callback for the same key joins it.** A helper such as `addCoins(player, n)` that calls `PlayerData:update` works inside an `updateOnce` grant or a `transaction`: it changes the same pending copy, which commits or aborts as a whole. A nested update can't abort on its own (return `false` from the outer callback), and `updateOnce` and `transaction` can't be nested. Assigning a `PlayerState` field inside a callback joins it the same way. `get` inside a callback still returns the last committed data.
+- **Session locking:** a key is held by one server at a time. A load waits up to `loadTimeout` for another server to release it (a player who just left that server), then fails. A lock not refreshed for `lockTimeout` seconds is treated as abandoned (that server crashed) and taken over, with a warning. Autosave refreshes the lock even when nothing changed.
+- **A server that loses its lock stops saving** that key and kicks the player, rather than overwriting the newer server's data.
+- **When a load fails** (DataStores down, lock never released, data that fails validation), the player is kicked by default. Until they are gone, `get` returns the template so other systems' `playerAdded` still run, `isLoaded` is `false`, and nothing is saved. A player who leaves while their load is waiting for a lock stops the wait.
+- **Missing fields are filled from the template** at every depth where both are tables; existing values are never replaced. Data saved by a newer server (more migrations) is refused unless the newer migrations are marked `backwardsCompatible`.
+- **Requests are retried** with exponential backoff (1, 2, 4, 8 seconds), and wait while the DataStore request budget is spent. During shutdown, retries are shortened to fit in `BindToClose`'s time.
+- **On shutdown**, `playerRemoving` saves and releases every player, then the store's `stop` saves and releases every other key. New loads fail once shutdown starts.
+- **A player who rejoins the same server quickly** waits for their previous session to finish saving before loading again.
+- Changed listeners run in their own thread; an error in one is reported with `[HYDROGEN]` and doesn't affect the change.
+- Records are capped by Roblox at 4 MB per key. Hydrogen doesn't split large data across keys.
+
+#### Why it's designed this way
+
+- **A store is a system.** Lapis and Lyra need `PlayerAdded` / `PlayerRemoving` / `BindToClose` wiring, and every game writes it slightly differently. Hydrogen's player hooks already run in dependency order, so loading in the store's `playerAdded` means everything that `use`s it sees loaded data, and saving in its `playerRemoving` means those systems get their last word first.
+- **Frozen data and copy-on-update**, like Lapis's `freezeData`. A frozen table can be handed out freely: nothing can change it by accident and skip validation or saving. `update` copies, runs your function, and keeps the old value for every top-level field that didn't change, so only real changes are frozen again and listeners (PlayerState) can find what changed by comparing references.
+- **The lock lives in the record**, written by `UpdateAsync` (as in Lapis), rather than in MemoryStore (as in Lyra). One request loads and locks, one saves and refreshes, and there is no second service to fail.
+- **Transactions commit in memory first, then persist as a group.** `update` never yields and is never blocked by a trade being saved; the cost is that until the commit succeeds, the trade's players are always saved together.
+- **`updateOnce` is the receipt primitive** rather than a full receipt handler, so `ProcessReceipt` routing can live in its own module and still record purchases atomically with the grant.
+
+### Per-player state with `Hydrogen.PlayerState`
+
+```luau
+-- ReplicatedStorage/State/Session.luau, required by the server and the client
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local PlayerData = require(script.Parent.PlayerData)
+
+return Hydrogen.PlayerState.new("Session", {
+	data = PlayerData,                      -- coins and inventory come from Data and are saved
+	runtime = { inCombat = false, kills = 0 }, -- live only while the player is in the game
+	replicate = {
+		coins = "owner",    -- only this player's client
+		inCombat = "everyone", -- every client
+		-- inventory and kills stay on the server
+	},
+})
+```
+
+Add both modules to both apps (`app:addSystemsFolders(ReplicatedStorage.State)` on each side). Then, on the server:
+
+```luau
+local state = Session:get(player)
+state.coins += 10           -- checked against PlayerData's schema, saved with the profile, sent to the owner
+state.inCombat = true       -- runtime only, sent to everyone
+Session:update(player, "inventory", function(items)
+	table.insert(items, "sword") -- edits a copy; return a value instead to replace it
+end)
+```
+
+And on the client:
+
+```luau
+Session:changed("coins", function(player, coins, old)
+	if player == Players.LocalPlayer then
+		coinsLabel.Text = tostring(coins)
+	end
+end)
+local mine = Session:find(Players.LocalPlayer) -- nil until the first update arrives
+```
+
+| Method | Server | Client |
+| --- | --- | --- |
+| `Session:get(player)` | The player's state. Read fields; assign to change them. Errors before `playerAdded` or after `playerRemoving`. | What has been replicated for `player`, read-only. Errors if nothing arrived yet. |
+| `Session:find(player)` | `get`, or `nil`. | `get`, or `nil`. |
+| `Session:update(player, field, fn)` | Edits one field through a copy. | Errors. |
+| `Session:changed(field, fn)` | `fn(player, value, old)` on every change, whatever made it (including `PlayerData:update`). | When an update arrives, including the first. |
+
+Rules:
+
+- **Declaring a field takes one word.** Fields of the Data store's template (and schema) are saved fields; fields in `runtime` are runtime-only, with the given starting value. `replicate` maps a field to `"owner"` or `"everyone"`; fields not listed never leave the server. A typo, an unknown audience or a field that is both saved and runtime errors when the state is defined.
+- **The state is created in `playerAdded` and removed in `playerRemoving`**, in dependency order: it `use`s its Data store, so it is created after the data loads and removed before it saves. Systems that `use` the state see it in their own `playerAdded`.
+- **Assigning a saved field writes to the Data store**, validated against the store's schema at the assignment. Changes made through the store (`update`, `updateOnce`, `transaction`) show up in the state and are replicated too, so there is one source of truth.
+- **Values are frozen.** `table.insert(state.inventory, x)` errors: assign a new table or use `update`. Assigning an unknown field errors.
+- Reading a field is a plain table lookup (the state's metatable `__index` is the values table), so reads cost about the same as a normal table. Writes go through `__newindex`. `for field, value in state do` iterates the fields.
+- **Replication is coalesced**: changes are sent once at the end of the frame, only the fields that changed, only to the clients allowed to see them. A player who joins gets the public fields of everyone already in the game, and leaving players are removed from every client.
+- The state's network event is named `Hydrogen/PlayerState/<name>`, so define each state in a shared module on both sides, like any network object. A state with no replicated fields registers no network object.
+- Under `Hydrogen.loopback()`, the server API is what `get` and `changed` use. `Session:replica(viewer, player)` returns what `viewer`'s client has received about `player`, so a test can check who sees what.
+
+#### Why it's designed this way
+
+- **Replication is declared per field**, next to where the field comes from, because "who can see this?" is the question that matters most and should be answered in one word, not in a separate remote per value.
+- **PlayerState doesn't keep its own copy of saved data.** It listens to its store, so a purchase granted through `PlayerData:updateOnce` replicates exactly like `state.coins += 10`, and there's no second copy to save or reconcile.
+- **Field access goes through a proxy** so assignment can validate, save and replicate. Reads hit a plain table through `__index`, so the cost is on writes, which are much rarer.
+- **Sending lives in its own small module**, so the `State` module can take it over without changing how fields are declared.
+
 ### Testing your systems
 
 `Hydrogen.test` runs a test of your systems in one call. It opens a loopback network (one VM plays the server and fake clients), installs a fake clock, builds and starts an app with your systems and fakes, and joins players. Then it runs your test function and tears everything down afterwards, even when the test errors. It works under [Lune](https://lune-org.github.io/docs) and in Studio, inside any test framework (frktest, TestEZ, Jest-Lua) or none: a failed expectation is an error. `test/Testing.luau` in this repository has runnable examples.
@@ -791,6 +993,7 @@ pesde run test
 ```
 
 Expected output ends with `Tests Ran: 106 | Passed: 106` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 108 | Passed: 108` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -821,6 +1024,22 @@ test/
   Testing.luau         Hydrogen.test, app:replace and Hydrogen.loopback, used the way a game's tests would
   Scope.luau           Scope on its own, and the system and player scopes an app keeps
   Fixtures/            modules the suites require
+  Data/
+    init.luau          re-exports Stores and its types
+    Stores.luau        Data.player / Data.store systems, backend selection
+    Store.luau         sessions: load and lock, update, transactions, updateOnce, saving, autosave
+    Backend.luau       backend type, in-memory backend, Roblox DataStore backend
+    Tables.luau        copy, deep freeze, reconcile, structural sharing
+    Clock.luau         time sources, swappable by tests
+  PlayerState/
+    init.luau          re-exports Define and its types
+    Define.luau        PlayerState.new: fields, proxies, lifecycle
+    Replication.luau   per-field audiences, coalesced sends, client replicas
+test/
+  _run.luau            Lune entry point: mocks Roblox globals, patches require, runs suites
+  App.luau  Definition.luau  Graph.luau  Network.luau
+  Testing.luau         app:replace and Hydrogen.loopback, used the way a game's tests would
+  Data.luau  PlayerState.luau
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
 ```

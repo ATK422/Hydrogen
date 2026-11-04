@@ -16,6 +16,8 @@ require("./Network")()
 require("./Testing")()
 require("./Clock")()
 require("./Scope")()
+require("./Data")()
+require("./PlayerState")()
 
 local frktest = require("@pkg/frktest")
 local console_reporter = frktest.reporters.console_reporter
