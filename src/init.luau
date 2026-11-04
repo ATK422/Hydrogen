@@ -8,6 +8,7 @@ local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
+local Debug = require("@self/Debug")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -65,6 +66,16 @@ export type Marketplace = Receipts.Marketplace
 export type MemoryReceiptStore = Receipts.MemoryStore
 export type FakeMarketplace = Receipts.FakeMarketplace
 
+export type DebugOptions = Debug.Options
+export type NetStat = Debug.NetStat
+export type NetLatency = Debug.Latency
+export type DebugView = Debug.View
+export type DebugPlayerView = Debug.PlayerView
+export type DebugRow = Debug.Row
+export type BootReport = Debug.BootReport
+export type DebugWarning = Debug.Warning
+export type DebugInspectable = Debug.Inspectable
+
 return {
 	App = App,
 	define = Definition.define,
@@ -98,4 +109,6 @@ return {
 	State = State,
 	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
 	Receipts = Receipts,
+	-- Kit: network stats (Debug.stats()) and a developer overlay. Add it to the app on both sides for the overlay.
+	Debug = Debug,
 }

@@ -73,9 +73,10 @@ Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Da
 Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
 Hydrogen.Receipts       -- kit: routes ProcessReceipt and grants each purchase once; add it to the app
+Hydrogen.Debug          -- kit: network stats (Debug.stats()) and a developer overlay; add it to the app on both sides
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Debug: `Hydrogen.DebugOptions`, `Hydrogen.NetStat`, `Hydrogen.NetLatency`, `Hydrogen.DebugView`, `Hydrogen.DebugPlayerView`, `Hydrogen.DebugRow`, `Hydrogen.BootReport`, `Hydrogen.DebugWarning` and `Hydrogen.DebugInspectable`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -1201,6 +1202,67 @@ To fake Receipts itself in a system's test, use `app:replace(Hydrogen.Receipts, 
 - **Waiting, not refusing, while the player loads.** Pending receipts are offered as the player joins, exactly when their data is still loading. Refusing them would leave the purchase until the player's next visit.
 - **One receipt per player at a time.** Grants for the same player can't interleave with each other's saves, so the reasoning above holds for each receipt.
 
+### Debug overlay and network stats
+
+`Hydrogen.Debug` counts traffic per network object and shows it, with the rest of your game's live state, in a panel you open with a key.
+
+```luau
+-- ServerScriptService/Main.server.luau
+Hydrogen.Debug.configure({
+	users = { 12345678 },     -- who may open it in live servers; Studio is always allowed
+	inspect = { PlayerData }, -- Data.player stores and PlayerStates to show per player
+})
+
+local app = Hydrogen.App.new({ debug = true, output = Hydrogen.Debug.bootOutput })
+app:addSystemsFolders(ServerScriptService.Systems)
+app:addSystem(Hydrogen.Debug)
+app:start()
+```
+
+```luau
+-- StarterPlayerScripts/Main.client.luau
+local app = Hydrogen.App.new({ debug = true, output = Hydrogen.Debug.bootOutput })
+app:addSystem(Hydrogen.Debug)
+app:start()
+-- F3 opens and closes the overlay.
+```
+
+The overlay has five tabs:
+
+- **Network**: for the server and for this client, every network object's messages per second in and out, estimated bytes per second, dropped messages and average function time, busiest first.
+- **Boot**: how long each system's `init` and `start` took on each side, the numbers `App.new({ debug = true })` prints.
+- **State**: every global `Hydrogen.State` value on the server.
+- **Player**: pick a player to see their per-player `Hydrogen.State` and the stores passed in `inspect`.
+- **Warnings**: the last 50 `[HYDROGEN]` warnings on the server and on this client.
+
+The stats work without the overlay, on either side, which is handy for logging and tests:
+
+```luau
+Hydrogen.Debug.enableStats()
+local buy = Hydrogen.Debug.stats()["Shop/Buy"]
+print(buy.inPerSecond, buy.inBytesPerSecond, buy.dropped, buy.latency)
+```
+
+Each entry has `inTotal`/`outTotal`, `inPerSecond`/`outPerSecond` (the last full second), `inBytes`/`outBytes` and their per-second rates, `dropped`, and for functions `latency` (round trips of calls this side made) and `handler` (time this side's handler took), each as `{ count, last, average, max }` in seconds. `Debug.disableStats()` stops and `Debug.resetStats()` forgets. Client code can read the server's view with `Hydrogen.Debug.fetch(userId?)`, which yields and returns `nil` if the player isn't authorized. `Debug.open()`, `close()` and `toggle()` drive the overlay from your own button or command, and `Debug.configure({ key = Enum.KeyCode.F6 })` changes the key.
+
+Rules:
+
+- **Add `Hydrogen.Debug` on both sides before `app:start()`.** It registers one network function, `Hydrogen/Debug`, which both sides need. Stats alone need no system.
+- **Nothing runs until it's used.** Until stats are enabled or someone opens the overlay, no middleware or observer is installed, so the network does no extra work. An authorized request turns server stats on for 10 seconds, and each refresh renews that. The open overlay keeps this client's stats on until 3 seconds after it closes. `enableStats()` keeps them on until `disableStats()`.
+- **Only authorized players get server data.** By default that's anyone in Studio, the owner of a user-owned game, and the UserIds in `users`. `authorize = function(player) ... end` replaces that check entirely, for staff lists or roles. An `authorize` that errors denies and warns. Unauthorized players get `nil`, and their request does no other work. Outside Studio, the panel opens only after the server answers, so for everyone else the key does nothing.
+- **Read-only.** The server sends formatted text, never live tables, so nothing in the panel can change game state.
+- **Bytes are estimates** of the plain values: 9 bytes for Hydrogen's id, then 9 per number, a string's length plus 4, 2 per boolean, 4 per table plus its contents (full list in `docs/ai/debug.md`). After 256 values in one message, each further value counts as a number, which keeps the estimate cheap. `:Encode()` objects send less than estimated.
+- **Dropped** counts events and requests that arrived but never reached a listener or handler: rate-limited, dropped by middleware or failing the schema. A server event sent to three players counts three messages out.
+- **Boot timings** need `output = Hydrogen.Debug.bootOutput` in `App.new`. They still print.
+- Under `Hydrogen.test`, one VM is the server and every client, so each message counts once leaving and once arriving. Rates follow the fake clock (`t:advance(1)`), and the harness turns stats off when it closes. The panel itself is only drawn in a real client; check it in a Studio play test.
+
+#### Why it's designed this way
+
+- **Stats are middleware plus the network's delivery observer.** Middleware sees every message arriving and leaving, with its values. The observer sees what reached a listener or handler. The difference is what was dropped, whatever dropped it. Neither needs a change to the network.
+- **Off by default, on while someone looks.** A collector that always runs costs every message, in every game, for numbers nobody reads. Leasing from the overlay keeps that cost to the moments you are actually debugging.
+- **Text over the wire, not values.** Formatting on the server makes the view small and safe to send: cycles, Instances and mixed tables can't break the remote. It also makes the panel read-only.
+- **Explicit `inspect`.** Data stores and PlayerStates hold private data, so the panel shows only what you list.
+
 ---
 
 ## Part 2: Working on Hydrogen itself
@@ -1225,7 +1287,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 200 | Passed: 200` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 213 | Passed: 213` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -1271,6 +1333,12 @@ src/
     FakeMarketplace.luau  stand-in MarketplaceService for tests
     Types.luau         Receipt, ReceiptStore, Marketplace, options
     Clock.luau  Log.luau  time sources and warnings, forwarding to Hydrogen.Clock and the log; tests can patch them
+  Debug/
+    init.luau          the Debug system and API: configure, stats, fetch, boot timings, warnings
+    Stats.luau         network stats: a global middleware plus the delivery observer, leases, byte estimate
+    Server.luau        authorization and the read-only view sent to the overlay
+    Format.luau        values as one line of text for the view
+    Overlay.luau       the client panel (verified in Studio; not drawn headless)
   Testing/
     init.luau          Hydrogen.test and Hydrogen.harness
     Expect.luau        expectations on deliveries, argument matching, failure messages
@@ -1283,6 +1351,7 @@ test/
   Data.luau  PlayerState.luau
   State.luau           Hydrogen.State end to end through loopback
   Receipts.luau        Hydrogen.Receipts with a fake marketplace, memory store and Data store
+  Debug.luau           Hydrogen.Debug stats, drops, latency, authorization and the server view
   Fixtures/            modules the suites require
 docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them
 default.project.json   Rojo project for development (see below)

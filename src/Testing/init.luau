@@ -10,6 +10,7 @@ local Log = require("./Log")
 local Network = require("./Network")
 local Runtime = require("./Network/Runtime")
 local State = require("./State")
+local Debug = require("./Debug")
 local Expect = require("@self/Expect")
 
 export type Expectation = Expect.Expectation
@@ -354,6 +355,8 @@ function Testing.harness(options: TestOptions?): Harness
 		end
 		-- State values are module singletons; the next test starts from their initial values.
 		step(State.reset)
+		-- Debug stats chain the observer below; stop them first so it can be removed.
+		step(Debug._reset)
 		if Runtime.Observer == record then
 			Runtime.Observer = nil
 		end
