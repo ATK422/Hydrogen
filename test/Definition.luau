@@ -19,6 +19,21 @@ return function()
 			check.not_nil(system.id)
 		end)
 
+		test.case("define accepts an explicit id", function()
+			local system = Definition.define("Lobby.Data", function()
+				return {}
+			end)
+
+			check.equal(system.id, "Lobby.Data")
+			check.equal(Definition.describe(system), "Lobby.Data")
+			check.should_error(function()
+				Definition.define("", function()
+					return {}
+				end)
+				return nil
+			end)
+		end)
+
 		test.case("order places used systems first", function()
 			local logger = Definition.define(function()
 				return {

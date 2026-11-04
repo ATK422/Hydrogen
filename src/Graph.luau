@@ -14,8 +14,10 @@ local function nodeId<T>(node: T): string
 	return (node :: Node).id
 end
 
-local function new<T>(): Graph<T>
+-- label names nodes in warnings and errors; it defaults to each node's id.
+local function new<T>(label: ((node: T) -> string)?): Graph<T>
 	local edges: { [T]: { T } } = {}
+	local name = label or nodeId
 
 	local graph = {} :: Graph<T>
 
@@ -59,11 +61,11 @@ local function new<T>(): Graph<T>
 						recording = true
 					end
 					if recording then
-						table.insert(cycle, nodeId(step))
+						table.insert(cycle, name(step))
 					end
 				end
-				table.insert(cycle, nodeId(node))
-				error(`Cyclic system dependency: {table.concat(cycle, " -> ")}`)
+				table.insert(cycle, name(node))
+				error(`[HYDROGEN] Cyclic system dependency: {table.concat(cycle, " -> ")}`)
 			end
 
 			visiting[node] = true
@@ -73,7 +75,7 @@ local function new<T>(): Graph<T>
 				if include[dependency] then
 					visit(dependency, chain)
 				else
-					warn(`System {nodeId(node)} depends on system {nodeId(dependency)} which was not added to the app`)
+					warn(`[HYDROGEN] System {name(node)} depends on system {name(dependency)} which was not added to the app`)
 				end
 			end
 

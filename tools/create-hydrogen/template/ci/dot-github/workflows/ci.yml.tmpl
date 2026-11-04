@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: ["{{branch}}"]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {{action_checkout}}
+
+      # Installs every tool pinned in rokit.toml (Rojo, pesde, Lune and the linters).
+      - name: Install tools
+        uses: {{action_setup_rokit}}
+
+      - name: Install packages
+        run: pesde install --locked
+
+      - name: Build the place
+        run: rojo build default.project.json --output build.rbxl
+
+      - name: Run tests
+        run: pesde run test
+{{#if stylua}}
+
+      - name: Check formatting
+        run: stylua --check src test
+{{/if}}
+{{#if selene}}
+
+      - name: Lint
+        run: selene src test
+{{/if}}
+{{#if luau_lsp}}
+
+      - name: Type check
+        run: |
+          rojo sourcemap default.project.json --output sourcemap.json
+          curl -sSfL -o globalTypes.d.luau https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/{{luau_lsp_version}}/scripts/globalTypes.d.luau
+          luau-lsp analyze --platform=roblox --sourcemap=sourcemap.json --definitions=@roblox=globalTypes.d.luau --ignore="**/roblox_packages/**" --ignore="**/luau_packages/**" src test
+{{/if}}

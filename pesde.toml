@@ -1,5 +1,5 @@
 name = "atk422/hydrogen"
-version = "0.3.0"
+version = "0.5.0"
 description = "A mildly opinionated luau framework/bootstrapper"
 authors = ["atk422"]
 license = "MIT"
@@ -9,6 +9,9 @@ includes = [
 	"README.md",
 	"LICENSE",
 	"CHANGELOG.md",
+	"AGENTS.md",
+	"llms.txt",
+	"docs/ai/*.md",
 	"src/**/*.luau",
 	"src/.luaurc",
 ]

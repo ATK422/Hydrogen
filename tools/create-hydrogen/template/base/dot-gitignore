@@ -1,0 +1,19 @@
+# pesde
+.pesde/
+lune_packages/
+luau_packages/
+roblox_packages/
+roblox_server_packages/
+
+# Rojo builds and the sourcemap (luau-lsp regenerates it)
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.lock.rbxl
+sourcemap.json
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+*.swp

@@ -1,0 +1,66 @@
+# {{name}}: notes for coding agents
+
+A Roblox game in Luau built on Hydrogen (systems, an app that boots them, a typed network). Rojo syncs `src/` into Studio, pesde installs packages, Rokit pins the tools.
+
+Hydrogen's goals apply to every change here: developer experience (code that is easy to read and hard to misuse), reliability (validated payloads, explicit lifecycles, tests), performance (no work in hot paths that isn't needed).
+
+## Read before writing Hydrogen code
+
+Hydrogen's docs ship inside the installed package, matching the installed version. They exist after `pesde install`:
+
+- `roblox_packages/.pesde/atk422+hydrogen/*/hydrogen/llms.txt`: index of the AI docs
+- `roblox_packages/.pesde/atk422+hydrogen/*/hydrogen/docs/ai/*.md`: the AI docs
+- `roblox_packages/.pesde/atk422+hydrogen/*/hydrogen/README.md`: the full reference (use it if the two above aren't there)
+
+The `*` is the installed version (see `pesde.lock`). Don't guess the API from other frameworks.
+
+## Layout
+
+| Path | In Roblox | What goes there |
+| --- | --- | --- |
+| `src/server/Systems/` | `ServerScriptService.Server.Systems` | server systems, one per ModuleScript |
+| `src/client/Systems/` | `StarterPlayer.StarterPlayerScripts.Client.Systems` | client systems |
+| `src/shared/Network/` | `ReplicatedStorage.Shared.Network` | network definitions, required by both sides |
+| `src/shared/` | `ReplicatedStorage.Shared` | other shared modules |
+{{#if examples}}
+| `src/server/Main.server.luau`, `src/client/Main.client.luau` | | boot the app; they pick up new systems and network modules by themselves |
+{{/if}}
+{{#unless examples}}
+| `src/server/Main.server.luau`, `src/client/Main.client.luau` | | boot the app; they pick up new systems by themselves. Before the first network module, uncomment `app:addNetwork(...)` in both |
+{{/unless}}
+| `test/*.test.luau` | | tests, run by `test/run.luau` |
+| `roblox_packages/`, `luau_packages/`, `lune_packages/` | `ReplicatedStorage.roblox_packages` | installed by pesde; never edit or commit |
+
+## Commands
+
+| Task | Command |
+| --- | --- |
+| Install tools, then packages | `rokit install` then `pesde install` |
+| Build a place | `rojo build default.project.json --output build.rbxl` |
+| Sync into Studio | `rojo serve` |
+| Sourcemap (for luau-lsp) | `rojo sourcemap default.project.json --output sourcemap.json` |
+| Test | `pesde run test` (exit code 1 on failure) |
+{{#if selene}}
+| Lint | `selene src test` |
+{{/if}}
+{{#if stylua}}
+| Format / check formatting | `stylua src test` / `stylua --check src test` |
+{{/if}}
+{{#if luau_lsp}}
+| Type check | `luau-lsp analyze --platform=roblox --sourcemap=sourcemap.json --definitions=@roblox=globalTypes.d.luau --ignore="**/roblox_packages/**" --ignore="**/luau_packages/**" src test` (download `globalTypes.d.luau` first, as in `.github/workflows/ci.yml`{{#unless ci}}, or from https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/{{luau_lsp_version}}/scripts/globalTypes.d.luau{{/unless}}) |
+{{/if}}
+| Add a package | `pesde add <scope/name>` then `pesde install` |
+
+Before finishing a change, run the tests{{#if lint}} and the checks in the table above{{/if}}.
+
+## Conventions
+
+- Strict mode everywhere (`.luaurc` sets `languageMode: strict`). Keep the type checker clean.
+- Require Hydrogen as `require(ReplicatedStorage.roblox_packages.hydrogen)`, with `local ReplicatedStorage = game:GetService("ReplicatedStorage")`.
+- One system per ModuleScript: the module returns `Hydrogen.define(function(use) ... end)` at top level. The system's id is the module's name. Call `use(require(path.To.Other))` synchronously in the constructor to depend on another system; both must be in the same app.
+- Hooks are optional methods: `init`, `start`, `playerAdded`, `playerRemoving`, `stop`. Don't use other systems' runtime state in `init`. Player hooks run in dependency order (`playerRemoving` in reverse).
+- Network objects (`Hydrogen.clientEvent`, `serverEvent`, `clientFunction`, `serverFunction`) live in `src/shared/Network/` with a GreenTea schema (`Hydrogen.gt`). Both Main scripts register that folder with `app:addNetwork`, before `app:start()`. Names must be unique and the same on both sides. Never create network objects after `app:start()`.
+- Call functions (`clientFunction:Fire`, `serverFunction:Fire`) from `start` or later, never from `init`.
+- On the client, `WaitForChild` anything outside the script's own folder before using it.
+- Tests require game code through the DataModel, like game code: `require(game:GetService("ServerScriptService").Server.Systems.Name)`. Use `Hydrogen.loopback()` for players and the network, `app:replace(System, fake)` for fakes, and stop every app and close every loopback in `test.on_test_leave`.
+- Commit `pesde.lock`. Don't commit `sourcemap.json` or build outputs.

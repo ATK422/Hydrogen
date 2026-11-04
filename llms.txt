@@ -1,0 +1,43 @@
+# Hydrogen
+
+> Hydrogen (`atk422/hydrogen` on pesde) is a Luau framework for Roblox games: dependency-ordered systems with lifecycle and player hooks, an App that boots them, a typed schema-checked network, and a batteries-included kit (data, player state, replicated state, scopes, receipts, logging, signals and timers, tagged components, input, guards, commands, config and feature flags, a debug overlay, testing and a network lint). Its goals are developer experience, reliability and performance, and it aims to feel like a standard library: everything you need is already there.
+
+Read `docs/ai/systems.md` and `docs/ai/app.md` first. Every file follows the same layout: Use it when, Quick start, API, Rules, Recipes, Mistakes, Testing, Errors and warnings, Works with. Require Hydrogen as `require(ReplicatedStorage.roblox_packages.hydrogen)` and write schemas with `Hydrogen.gt` (GreenTea).
+
+## Core
+
+- [Systems](docs/ai/systems.md): `Hydrogen.define`, `use`, `init`/`start`/`playerAdded`/`playerRemoving`/`stop`, ordering rules
+- [App](docs/ai/app.md): `Hydrogen.App.new`, `addNetwork`, `addSystemsFolders`, `start`, `stop`, boot sequence
+- [Network](docs/ai/network.md): `clientEvent`, `serverEvent`, `clientFunction`, `serverFunction`, `namespace`, validation, queuing, timeouts
+- [Middleware](docs/ai/middleware.md): `Use`, `UseRequest`, `UseResponse`, `useMiddleware`, `logger`, `rateLimit`, `DROP`
+- [Network performance](docs/ai/network-performance.md): `:Unreliable()`, batching, `:Encode()`
+- [Character hooks](docs/ai/character.md): `characterAdded`/`characterRemoving` system hooks, `Scope.of(system, character)`, fake characters in tests
+
+## Kit
+
+- [Data](docs/ai/data.md): `Hydrogen.Data`, DataStore persistence with session locking, migrations, autosave
+- [PlayerState](docs/ai/player-state.md): `Hydrogen.PlayerState`, per-player state loaded from Data, per-field replication
+- [State](docs/ai/state.md): `Hydrogen.State`, server-authoritative state replicated to clients
+- [Scope](docs/ai/scope.md): `Hydrogen.Scope`, cleanup tied to system and player lifetimes
+- [Receipts](docs/ai/receipts.md): `Hydrogen.Receipts`, idempotent developer product and game pass handling
+- [Log](docs/ai/log.md): `Hydrogen.Log`, tagged, levelled, structured logging with sinks, a ring buffer and rate limiting
+- [Signal](docs/ai/signal.md): `Hydrogen.Signal`, typed in-process signals
+- [Scheduler](docs/ai/scheduler.md): `Hydrogen.Scheduler`, timers tied to lifetimes: after, every, fixed-step loops, debounce, throttle
+- [Component](docs/ai/component.md): `Hydrogen.Component`, code bound to CollectionService-tagged instances, one object and scope each
+- [Input](docs/ai/input.md): `Hydrogen.Input`, client input actions with contexts, rebinding, device glyphs and touch buttons
+- [Guards](docs/ai/guards.md): `Hydrogen.Guards`, cooldowns, roles/permissions, range checks and predicates as server-side middleware
+- [Commands](docs/ai/commands.md): `Hydrogen.Commands`, in-game commands with typed args, permissions and a console
+- [Config](docs/ai/config.md): `Hydrogen.Config`, typed config values and feature flags with segments, environments and live sources
+- [Debug](docs/ai/debug.md): `Hydrogen.Debug`, network stats and a developer overlay
+
+## Testing
+
+- [Testing primitives](docs/ai/loopback.md): `app:replace`, `Hydrogen.loopback()`
+- [Test harness](docs/ai/testing.md): one-call test setup, expectations, running game tests under Lune
+- [Clock](docs/ai/clock.md): the time source that core and kit modules use, and the fake clock for tests
+- [Network lint](docs/ai/lint.md): `pesde x atk422/hydrogen_lint`, boots both sides headless and checks the network: rules, `--json`, exit codes
+
+## Optional
+
+- [README](README.md): the full human guide, including design rationale and the contributor guide
+- [CHANGELOG](CHANGELOG.md): what changed in each version, including breaking changes

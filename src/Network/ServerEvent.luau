@@ -1,18 +1,23 @@
 local gt = require("../../roblox_packages/gt")
+local Log = require("../Log")
+local Codec = require("./Codec")
 local Middleware = require("./Middleware")
 local Runtime = require("./Runtime")
 
 export type ServerEvent<T...> = Runtime.InnerNetworkInfo<T...> & {
     _listeners: { (T...) -> () },
+    _codec: Codec.Codec?,
     On: (self: ServerEvent<T...>, callback: (T...) -> ()) -> () -> (),
     Fire: (self: ServerEvent<T...>, player: Player | { Player }, T...) -> (),
     FireAll: (self: ServerEvent<T...>, T...) -> (),
     FireExcept: (self: ServerEvent<T...>, player: Player | { Player }, T...) -> (),
     Use: (self: ServerEvent<T...>, middleware: Middleware.Middleware<T...>) -> () -> (),
+    Unreliable: (self: ServerEvent<T...>) -> ServerEvent<T...>,
+    Encode: (self: ServerEvent<T...>) -> ServerEvent<T...>,
 }
 
 local function toPlayers(player: Player | { Player }): { Player }
-    if typeof(player) == "Instance" then
+    if Runtime:isPlayer(player) then
         return { player :: Player }
     end
 
@@ -25,19 +30,36 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
     local event = {} :: ServerEvent<T...>
 
     event._name = name
+    event._kind = "ServerEvent"
     event._middleware = {}
     event._listeners = {}
     event._schema = gt.build(...)
+    event._codec = nil
+
+    local function forward(players: { Player }, ...: any)
+        if Middleware.dropped(...) then
+            return
+        end
+        Runtime:fireClientEvent(name, players, Codec.encodeWith(event._codec, ...))
+    end
 
     local function send(players: { Player }, ...: any)
-        Runtime:fireClientEvent(name, players, Middleware.run(event._middleware, "ServerEvent", name, "outgoing", "event", nil, players, ...))
+        forward(players, Middleware.run(event._middleware, "ServerEvent", name, "outgoing", "event", nil, players, ...))
     end
 
     local function deliver(...: any)
+        if Middleware.dropped(...) then
+            return
+        end
+
         local ok, cause = event._schema:matches(...)
         if not ok then
-            warn(`[HYDROGEN] Dropped invalid {name} from server: {cause:formatErr()}`)
+            Log.warn(`[HYDROGEN] Dropped invalid {name} from server: {cause:formatErr()}`)
             return
+        end
+
+        if Runtime.Observer then
+            Runtime:observeEvent("ServerEvent", name, Runtime:loopbackClient(), ...)
         end
 
         -- Cloned so a listener that disconnects itself doesn't skip the next one.
@@ -57,7 +79,7 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
 
     function event:FireAll(...: T...)
         self._schema:assert(...)
-        send(game:GetService("Players"):GetPlayers(), ...)
+        send(Runtime:getPlayers(), ...)
     end
 
     function event:FireExcept(player: Player | { Player }, ...: T...)
@@ -69,7 +91,7 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
         end
 
         local players = {}
-        for _, target in game:GetService("Players"):GetPlayers() do
+        for _, target in Runtime:getPlayers() do
             if not skip[target] then
                 table.insert(players, target)
             end
@@ -78,13 +100,44 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
         send(players, ...)
     end
 
+    -- Sends over an UnreliableRemoteEvent: may be dropped or arrive out of order, and is
+    -- never queued. For data the next message replaces, such as per-frame state.
+    function event:Unreliable(): ServerEvent<T...>
+        Runtime.Unreliable[name] = true
+        return self
+    end
+
+    -- Packs payloads into a buffer using the schema. Both sides must agree, so call it in the
+    -- shared definition. Middleware and listeners still see the plain values.
+    function event:Encode(): ServerEvent<T...>
+        self._codec = Codec.new(self._schema, name)
+        return self
+    end
+
     function event:Use(middleware: Middleware.Middleware<T...>): () -> ()
         return Middleware.add(self._middleware, middleware)
     end
 
-    Runtime:registerNetworkObject(name)
-    Runtime:registerEventHandler(name, function(...)
+    local function receive(...: any)
         deliver(Middleware.run(event._middleware, "ServerEvent", name, "incoming", "event", nil, nil, ...))
+    end
+
+    local function receiveDecoded(ok: boolean, ...: any)
+        if not ok then
+            Log.warn(`[HYDROGEN] Dropped undecodable {name} from server: {(...)}`)
+            return
+        end
+        receive(...)
+    end
+
+    Runtime:registerNetworkObject(name, event)
+    Runtime:registerEventHandler(name, function(...)
+        local codec = event._codec
+        if codec then
+            receiveDecoded(pcall(codec.decode, ...))
+        else
+            receive(...)
+        end
     end)
 
     return event
