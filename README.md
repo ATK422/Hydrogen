@@ -73,9 +73,10 @@ Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Da
 Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
 Hydrogen.Receipts       -- kit: routes ProcessReceipt and grants each purchase once; add it to the app
+Hydrogen.Log            -- tagged, levelled logging: Log.of(system or name, player?), setLevel, sinks, buffer
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Log: `Hydrogen.Logger`, `Hydrogen.LogLevel`, `Hydrogen.LogThreshold`, `Hydrogen.LogFields`, `Hydrogen.LogMessage`, `Hydrogen.LogLine`, `Hydrogen.LogSink`, `Hydrogen.LogBuffer` and `Hydrogen.LogRateLimitOptions`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -389,7 +390,7 @@ Output looks like:
 Options:
 
 - `filter: (context) -> boolean`: return `false` to skip a message, e.g. `function(context) return context.name ~= "MouseMoved" end`.
-- `output: (message: string) -> ()`: where lines go. Defaults to `print`.
+- `output: (message: string) -> ()`: where lines go. By default they go through [`Hydrogen.Log`](#logging-with-hydrogenlog) at `info` with the tag `HYDROGEN`: printed, and seen by your sinks, buffers and `t:expectLog`.
 
 Because it's global middleware, the logger shows what is actually on the wire, after your own outgoing middleware and before your own incoming middleware.
 
@@ -890,7 +891,9 @@ On the harness itself: `t:expectNothingFired()` (no event or call at all), `t:ex
 
 While a test runs, its warnings are captured instead of printed. `t:expectWarning(text)` passes when a warning contains `text` (plain text, not a pattern) and marks every such warning as expected. `t:expectNoWarnings()` fails on any warning that isn't expected. Unexpected warnings are printed when the test ends, so nothing is hidden, and expected ones don't clutter the output.
 
-Under [Hydrogen's Lune runtime](#running-tests-under-lune) every `warn()` is captured, your systems' included. In Studio the harness captures the warnings Hydrogen's network emits (dropped payloads, unknown ids, mismatches); other `warn()` calls print as usual.
+Under [Hydrogen's Lune runtime](#running-tests-under-lune) every `warn()` is captured, your systems' included. In Studio the harness captures the warnings Hydrogen and its kit modules emit (dropped payloads, unknown ids, mismatches, failed saves) and `Hydrogen.Log` warn and error lines; other `warn()` calls print as usual.
+
+`t:expectLog(level, text)` checks any [`Hydrogen.Log`](#logging-with-hydrogenlog) line, e.g. `t:expectLog("info", "bought item=sword")`, and `t:logs(level?)` returns them with their fields. Pass `logLevel = "debug"` in the options to see debug lines.
 
 #### Time and the fake clock
 
@@ -1201,6 +1204,89 @@ To fake Receipts itself in a system's test, use `app:replace(Hydrogen.Receipts, 
 - **Waiting, not refusing, while the player loads.** Pending receipts are offered as the player joins, exactly when their data is still loading. Refusing them would leave the purchase until the player's next visit.
 - **One receipt per player at a time.** Grants for the same player can't interleave with each other's saves, so the reasoning above holds for each receipt.
 
+### Logging with `Hydrogen.Log`
+
+`Hydrogen.Log.of(system)` gives a system a logger. Its lines carry the system's name and optional fields:
+
+```luau
+return Hydrogen.define(function()
+	local Shop = {}
+	local log = Hydrogen.Log.of(Shop) -- named after the system's id, "Shop"
+
+	function Shop.buy(player: Player, item: string, price: number)
+		log:info("bought", { player = player.Name, item = item, price = price })
+	end
+
+	return Shop
+end)
+```
+
+```
+[Shop] bought item=sword player=Alice price=50
+```
+
+Loggers have `debug`, `info`, `warn` and `error`. `error` only logs; it doesn't throw. Debug and info lines go to `print`, warn and error lines to `warn`. Debug and error lines say so (`[Shop] debug: ...`, `[Shop] error: ...`). Fields are sorted and written as `key=value`, with strings quoted only when they contain spaces.
+
+- `Hydrogen.Log.of("Matchmaking")` names a logger without a system. The same name or system always gives the same logger.
+- `Hydrogen.Log.of(Shop, player)` adds `player=<Name>` to every line, and `log:with({ round = 3 })` adds any fields you like. Both share the parent's name and level.
+- `log:enabled("debug")` tells you whether a line would be emitted.
+
+#### Levels
+
+The levels are `debug`, `info`, `warn` and `error`, plus `"off"`. By default Studio shows everything from `debug` up and live servers from `info` up. Change the global level, or one name's:
+
+```luau
+Hydrogen.Log.setLevel("warn")                 -- everything: warnings and errors only
+Hydrogen.Log.setLevel("debug", "Matchmaking") -- except this name
+Hydrogen.Log.setLevel(nil, "Matchmaking")     -- back to the global level
+log:setLevel("debug")                         -- the same, from a logger
+```
+
+A filtered-out line costs one comparison. Luau still evaluates the arguments, though, so keep expensive work out of them. Pass a function and it runs only if the line is emitted, or guard per-frame code with `enabled`:
+
+```luau
+log:debug(function()
+	return `path recomputed`, { nodes = #path, cost = pathCost(path) }
+end)
+
+if log:enabled("debug") then
+	log:debug("tick", { dt = dt })
+end
+```
+
+#### Sinks
+
+Every emitted line goes to each sink as a frozen table: `level`, `tag`, `message`, `fields`, `text` (exactly what the console prints) and `at` (`Hydrogen.Clock.now()`).
+
+- `Hydrogen.Log.console` is the default sink. Remove it with `Hydrogen.Log.removeSink(Hydrogen.Log.console)` to send lines only to your own sinks.
+- `Hydrogen.Log.buffer(capacity?)` keeps the last 200 lines (or `capacity`) for a debug overlay: `buffer:lines(minLevel?)`, `buffer:total()`, `buffer:clear()`, `buffer:stop()`.
+- `Hydrogen.Log.addSink(function(line) ... end)` sends lines anywhere, e.g. queued for an analytics or HTTP endpoint your game controls. It returns a function that removes the sink.
+
+A sink that errors is reported once, as `[HYDROGEN] A log sink failed ...`, and keeps receiving lines; logging carries on for every other sink. Your sinks run in their own thread, so one that yields doesn't hold up the code that logged. Still, queue lines and send them from your own loop rather than making a request per line.
+
+Hydrogen's own `[HYDROGEN]` warnings and the `Hydrogen.logger()` traffic lines go through the same sinks, with the tag `HYDROGEN`.
+
+#### Rate limiting
+
+```luau
+Hydrogen.Log.rateLimit({ burst = 5, window = 10 })
+```
+
+With it on, identical lines (same level and text) beyond `burst` in `window` seconds are dropped. When the window ends, one summary line follows, e.g. `[Physics] part fell out of the world (repeated 595 more times in 10s)`. It's off by default; `Hydrogen.Log.rateLimit(false)` turns it off again.
+
+#### In tests
+
+`Hydrogen.test` records every line. `t:expectLog(level, text)` passes when a line at that level contains `text`, and `t:logs(level?)` returns the lines. Warn and error lines count as warnings for `t:expectWarning` and `t:expectNoWarnings`. Lune runs as a live server, so debug lines are off by default. Pass `logLevel = "debug"` in the test options to see them. Levels, sinks and the rate limit are put back when the test ends.
+
+#### Why it's designed this way
+
+- **`Log.of(system)`, like `Scope.of(system)`.** A system's name is already its id, so there's nothing to type twice. The name is looked up on the first line, so you can make the logger inside the constructor, before `define` returns. (`for` is a Luau keyword, so the function can't be called `Log.for`.)
+- **The cost check is one comparison.** Each logger caches the lowest level it emits. Changing a level clears those caches, and each logger works its threshold out again on its next line. Levels change rarely and lines are logged often, so the work goes on the rare side.
+- **Laziness through functions, not format strings.** A `printf`-style API would also defer formatting. It would split the message from the values, though, and couldn't defer computing them. A function defers everything, and `enabled` covers the per-frame case where even a closure is too much.
+- **`key=value` fields instead of interpolation.** Fields stay structured for sinks (an overlay can filter by `player`, analytics can count `item`), and the printed form is still one readable line.
+- **Sinks can't break the caller.** Logging is called from everywhere, including error paths. A sink that throws or yields would turn a log line into a new bug at the worst moment, so each sink is isolated and reported once.
+- **Rate limiting is opt-in.** Dropping lines hides information, so you decide when the trade is worth it. When it's on, the summary line keeps the count honest.
+
 ---
 
 ## Part 2: Working on Hydrogen itself
@@ -1234,7 +1320,11 @@ src/
   init.luau            public API and exported types
   App.luau             App: collects systems, runs init -> Network.init -> start, player and stop hooks
   Clock.luau           time sources (now, time, wait, delay, cancel, heartbeat) and the fake clock
-  Log.luau             warnings go through here so the test harness can capture them
+  Log/
+    init.luau          Hydrogen.Log: loggers, levels, sinks, rate limiting; Log.warn / Log.capture for Hydrogen's own warnings
+    Types.luau         Level, Line, Logger, Buffer types and level ranks
+    Format.luau        how a line reads: [Tag] message key=value
+    Buffer.luau        the ring buffer sink
   Definition.luau      define/use, system ids, dependency graph wiring, replace redirects, lifecycle-stripping type function
   Graph.luau           generic dependency graph with topological sort and cycle detection
   Network/
@@ -1283,6 +1373,7 @@ test/
   Data.luau  PlayerState.luau
   State.luau           Hydrogen.State end to end through loopback
   Receipts.luau        Hydrogen.Receipts with a fake marketplace, memory store and Data store
+  Log.luau             Hydrogen.Log: levels, laziness, sinks, rate limiting, harness capture, Log.warn compatibility
   Fixtures/            modules the suites require
 docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them
 default.project.json   Rojo project for development (see below)
@@ -1308,7 +1399,7 @@ To add a test file: create `test/Thing.luau` that returns a function registering
 - Strict mode is on for every file through `.luaurc` / `src/.luaurc`. Keep code type-checking clean.
 - Requires: `@self/...` from `init.luau` files, `./...` or `../...` elsewhere. GreenTea is loaded by relative path (`./roblox_packages/gt` from `src/init.luau`, `../../roblox_packages/gt` from `src/Network/*`).
 - Those paths rely on `src` and `roblox_packages` being siblings. That is the layout pesde generates for consumers, and `default.project.json` mirrors it for development. Don't move `roblox_packages` inside `src`. After changing `default.project.json`, regenerate the sourcemap with `rojo sourcemap default.project.json --output sourcemap.json`.
-- Runtime warnings and errors are prefixed with `[HYDROGEN]`. Warn through `Log.warn` (`src/Log.luau`) so tests can capture it.
+- Runtime warnings and errors are prefixed with `[HYDROGEN]`. Warn through `Log.warn` (`src/Log/init.luau`, required as `./Log` or `../Log`) so tests can capture it; the text is kept exactly.
 - Read time and schedule work through `Clock` (`Clock.now()`, `Clock.delay(...)`, looked up at call time), never `os.clock` / `task.delay` directly, so the fake clock reaches it.
 - Match the indentation of the file you edit (most use tabs; some `Network/*` files use 4 spaces).
 - Public API changes go through `src/init.luau`. Update this README when the API or a network rule changes.

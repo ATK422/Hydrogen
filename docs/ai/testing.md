@@ -97,6 +97,7 @@ export type TestOptions = {
 	start: boolean?,                           -- default true: app started before body runs
 	app: Hydrogen.AppOptions?,                 -- passed to App.new, e.g. { debug = true }
 	clock: (boolean | Hydrogen.FakeClockOptions)?, -- default: fake clock; false = real time; table = fake start values
+	logLevel: Hydrogen.LogThreshold?,          -- Hydrogen.Log global level during the test, e.g. "debug"
 }
 ```
 
@@ -122,6 +123,8 @@ t:expectNothingFired(): ()          -- no event or call delivered since start / 
 t:expectWarning(text: string): ()   -- some captured warning contains text (plain substring); marks all matches expected
 t:expectNoWarnings(): ()            -- no captured warning that isn't marked expected
 t:warnings(): { string }            -- every captured warning
+t:expectLog(level: Hydrogen.LogLevel, text: string): ()  -- a Hydrogen.Log line at exactly level contains text (plain); marks warn/error matches expected
+t:logs(level: Hydrogen.LogLevel?): { Hydrogen.LogLine }   -- every Hydrogen.Log line emitted during the test, oldest first
 t:deliveries(object: any?): { Hydrogen.Delivery }  -- recorded deliveries, oldest first
 t:clear(): ()                       -- forget recorded deliveries (not warnings)
 t:close(): ()                       -- teardown; idempotent; may yield (waits for app:stop)
@@ -176,7 +179,8 @@ Lune.modules: { [any]: any }        -- ModuleScript Instance -> what require(ins
 - **Teardown steps the fake clock** while `app:stop()` waits, so `playerRemoving` / `stop` hooks that `Clock.wait` (saves with retry delays) finish. It gives up after 5 real seconds with a warning. Other threads still waiting on the fake clock are never resumed after the test.
 - **Systems are module singletons.** State a system keeps in upvalues or its own table survives between tests in the same VM. Reset it in `init`, or key it by player and clear it in `playerRemoving`.
 - **Replacements:** the fake runs in the original's place in the boot order, and while the app runs the original table forwards every field to the fake. Don't copy fields out of a dependency at construction time (`local getCoins = use(Data).getCoins`), because the copy keeps pointing at the original.
-- **Warnings:** while a harness is open, warnings sent through Hydrogen's log are captured, not printed. Under the Lune runtime every `warn()` call is captured. In Studio, only the network's warnings are.
+- **Warnings:** while a harness is open, warnings sent through Hydrogen's log are captured, not printed. That includes `Hydrogen.Log` warn and error lines (error lines count as warnings). Under the Lune runtime every `warn()` call is captured. In Studio, only Hydrogen's and `Hydrogen.Log`'s are.
+- **Log lines:** every `Hydrogen.Log` line is recorded for `t:expectLog` / `t:logs`. Debug lines are off by default under Lune (it runs as a live server): pass `logLevel = "debug"`. Log levels, sinks and the rate limit set during a test are put back when it closes. See log.md.
 
 ## Recipes
 
@@ -408,6 +412,7 @@ This file is the testing module itself. The tools under it, `app:replace(origina
 | `<method> expects a player from the test (...), got nil` | `firedTo` / `firedBy` / `calledBy` / `notFired` got a non-player | Pass a player from `t:join`, `t:player` or the test function's arguments |
 | `Expected a warning containing "<text>", but no warnings were emitted` / `the warnings were:` | `t:expectWarning` found no match | Match a substring of an actual warning (plain text, not a pattern) |
 | `Expected no warnings, but got:` | Unexpected warnings | Fix the cause, or `t:expectWarning(text)` it first |
+| `Expected a <level> line containing "<text>", but ...` | `t:expectLog` found no line at that level containing text; for debug it says the current level | Match a substring of `line.text`; pass `logLevel = "debug"` for debug lines |
 | `t:expect expects a network object made with clientEvent, serverEvent, clientFunction or serverFunction` | Passed something else | Pass the network object itself |
 | `t:replace must come before the app starts: pass replace = { [Original] = fake } in the options, or start = false` | Replace after start | As the message says |
 | `The app already started; Hydrogen.test starts it unless the options say start = false` | `t:start()` called twice or without `start = false` | Remove the call or pass `start = false` |
@@ -435,6 +440,7 @@ This file is the testing module itself. The tools under it, `app:replace(origina
 
 ## Works with
 
+- **Hydrogen.Log** (log.md): every log line is recorded (`t:expectLog`, `t:logs`); warn and error lines are captured as warnings; `logLevel` sets the level for the test.
 - **Hydrogen.Clock** (clock.md): the harness installs `Hydrogen.Clock.fake()`, available as `t.clock`. Any code using `Hydrogen.Clock` advances with `t:advance`.
 - **Network** (clientEvent, serverEvent, clientFunction, serverFunction, middleware, `Hydrogen.rateLimit`): all run unchanged over the loopback. `App.new({ batching = true })` is accepted but batching is skipped under loopback.
 - **Kit modules (Data, PlayerState, State, Scope, Receipts)** are systems or use systems: pass them in `systems` and fake their stores with `replace`. Their timers use `Hydrogen.Clock`, so `t:advance` drives autosaves, retries, cooldowns and State's end-of-frame send. The harness calls `Hydrogen.State.reset()` when it closes.
