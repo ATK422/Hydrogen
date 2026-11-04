@@ -8,6 +8,7 @@ local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
+local Config = require("@self/Config")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -65,6 +66,15 @@ export type Marketplace = Receipts.Marketplace
 export type MemoryReceiptStore = Receipts.MemoryStore
 export type FakeMarketplace = Receipts.FakeMarketplace
 
+export type Config<V, F> = Config.Config<V, F>
+export type ConfigSpec<V, F> = Config.Spec<V, F>
+export type Flag = Config.Flag
+export type FlagRule = Config.FlagRule
+export type ConfigSegment = Config.Segment
+export type ConfigEnvironment = Config.Environment
+export type ConfigSource = Config.Source
+export type MemoryConfigSource = Config.MemorySource
+
 return {
 	App = App,
 	define = Definition.define,
@@ -98,4 +108,6 @@ return {
 	State = State,
 	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
 	Receipts = Receipts,
+	-- Typed config and feature flags: Config.define(name, { values, flags, environments, source }).
+	Config = Config,
 }
