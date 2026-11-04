@@ -805,7 +805,9 @@ group("Tools", function()
 	end)
 
 	test("exec returns nil for a program that isn't installed", function()
-		equal(Tools.exec("create-hydrogen-no-such-tool", { "--version" }), nil)
+		local result = Tools.exec("create-hydrogen-no-such-tool", { "--version" })
+		-- On failure, show what this platform reported, so a new message is easy to add.
+		equal(if result then result.stderr else nil, nil)
 	end)
 end)
 

@@ -5,7 +5,7 @@
 
 return {
 	-- The generator's own version, printed by --version. Keep it in step with pesde.toml.
-	cli = "0.1.0",
+	cli = "0.1.1",
 
 	-- pesde dependency requirement for Hydrogen in the generated pesde.toml.
 	hydrogen = "^0.5.0",
