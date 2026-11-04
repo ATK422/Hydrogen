@@ -95,6 +95,12 @@ local function collect(root: string, relative: string, into: { [string]: string 
 	end
 end
 
+-- Every template file is text. A Windows checkout can hand us CRLF, but the project's
+-- .gitattributes and stylua.toml say LF, so write LF regardless.
+local function readText(path: string): string
+	return (string.gsub(fs.readFile(path), "\r\n", "\n"))
+end
+
 -- Every file the project will have, rendered, sorted by path.
 function Scaffold.plan(answers: Options.Answers, vars: Render.Vars, templateRoot: string?): { File }
 	local root = templateRoot or Scaffold.templateRoot()
@@ -102,7 +108,7 @@ function Scaffold.plan(answers: Options.Answers, vars: Render.Vars, templateRoot
 
 	local function add(sourcePath: string, relative: string)
 		local outPath, isTemplate = Render.path(relative)
-		local contents = fs.readFile(sourcePath)
+		local contents = readText(sourcePath)
 		if isTemplate then
 			contents = Render.text(contents, vars, relative)
 		end
@@ -126,9 +132,9 @@ function Scaffold.plan(answers: Options.Answers, vars: Render.Vars, templateRoot
 		local plain = join(licenses, answers.license)
 		local templated = plain .. ".tmpl"
 		if fs.isFile(templated) then
-			byPath.LICENSE = { path = "LICENSE", contents = Render.text(fs.readFile(templated), vars, "LICENSE") }
+			byPath.LICENSE = { path = "LICENSE", contents = Render.text(readText(templated), vars, "LICENSE") }
 		elseif fs.isFile(plain) then
-			byPath.LICENSE = { path = "LICENSE", contents = fs.readFile(plain) }
+			byPath.LICENSE = { path = "LICENSE", contents = readText(plain) }
 		else
 			error(`no license text for '{answers.license}' in {licenses}`, 0)
 		end
