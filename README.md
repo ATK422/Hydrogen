@@ -33,6 +33,20 @@ pesde install
 
 Hydrogen validates network payloads with [GreenTea](https://github.com/corecii/greentea). Write your schemas with `Hydrogen.gt`, the same GreenTea copy Hydrogen checks with, so you don't need to install it separately.
 
+### Upgrading from 0.4
+
+Almost all of 0.5 is new kit modules (Data, PlayerState, State, Scope, Receipts, Log, Signal, Scheduler, Component, Input, Guards, Commands, Config, Debug, the test harness and the network lint), and they cost nothing until you use them. These changes can affect a 0.4 game:
+
+- **Systems you `use` are added for you.** A system that's `use`d but wasn't added to the app now boots first, instead of only warning. If a client system `use`s a module that should only run on the server, split it or `app:replace` it on the client.
+- **`Hydrogen.logger()` output and `[HYDROGEN]` warnings go through `Hydrogen.Log`.** The text is unchanged, but `Hydrogen.Log.setLevel` now applies to them: a level above `info` hides traffic lines, and one above `warn` hides Hydrogen's warnings.
+- **Under `Hydrogen.loopback()`**, `net:client()` is `nil` while the server handles a client's message, and opening a loopback drops events an earlier test queued.
+
+Things you can now delete from game code:
+
+- `CharacterAdded` wiring per player: define `characterAdded` / `characterRemoving` on the system, with `Hydrogen.Scope.of(self, character)` for cleanup.
+- A signal class or timer helpers copied into the project: use `Hydrogen.Signal` and `Hydrogen.Scheduler`.
+- Modules that returned a bare GreenTea schema had to stay out of `app:addNetwork` (0.4.0's object count looped on them forever). 0.5 counts them, so a shared module can return network objects, State and schemas together.
+
 ### Upgrading from 0.3
 
 Most of 0.4 is new and opt-in. These changes can break a 0.3 game:

@@ -8,7 +8,7 @@ return {
 	cli = "0.1.0",
 
 	-- pesde dependency requirement for Hydrogen in the generated pesde.toml.
-	hydrogen = "^0.4.0",
+	hydrogen = "^0.5.0",
 
 	-- Rokit tools: rokit.toml entries are `<name> = "<repo>@<version>"`.
 	tools = {

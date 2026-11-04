@@ -103,7 +103,7 @@ function Locate.engine(args: { string }, cwd: string): (string?, string?)
 	if folder then
 		local engine = engineIn(folder)
 		if not engine then
-			return nil, `This project's Hydrogen ({version}) has no network lint. Update Hydrogen in pesde.toml to the release after 0.4.0, then run pesde install.`
+			return nil, `This project's Hydrogen ({version}) has no network lint. Update Hydrogen in pesde.toml to 0.5.0 or later, then run pesde install.`
 		end
 		return engine, nil
 	end
