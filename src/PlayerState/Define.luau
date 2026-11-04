@@ -195,23 +195,25 @@ function PlayerState.new<D, R>(name: string, options: Options<D, R>): Definition
 		return container
 	end
 
-	-- A client's read-only view, backed by the replica's values table.
+	-- A client's read-only view. It reads State on every access, so a view kept around stays current.
 	local clientViews: { [Player]: any } = setmetatable({}, { __mode = "k" }) :: any
 	local function clientView(player: Player): any?
-		if not replication then
-			return nil
-		end
-		local localPlayer = Players.LocalPlayer
-		local replica = replication:replica(localPlayer, player)
-		if not replica then
+		if not replication or player.Parent ~= Players then
 			return nil
 		end
 		local view = clientViews[player]
-		if not view or getmetatable(view).__index ~= replica.values then
+		if not view then
+			local live = replication :: Replication.Replication
 			view = setmetatable({}, {
-				__index = replica.values,
+				__index = function(_, field: string)
+					return live:read(player, field)
+				end,
 				__iter = function()
-					return next, replica.values
+					local values = {}
+					for _, field in live:visible(Players.LocalPlayer, player) do
+						values[field] = live:read(player, field)
+					end
+					return next, values
 				end,
 				__newindex = readOnly,
 			})
@@ -285,7 +287,7 @@ function PlayerState.new<D, R>(name: string, options: Options<D, R>): Definition
 		if onClient() then
 			local view = clientView(player)
 			if view == nil then
-				error(`[HYDROGEN] PlayerState {name}: nothing replicated for {player.Name} yet; use find, or listen with changed`, 2)
+				error(`[HYDROGEN] PlayerState {name}: {player.Name} isn't in the game (or nothing is replicated); use find`, 2)
 			end
 			return view
 		end
