@@ -8,6 +8,7 @@ local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
+local Guards = require("@self/Guards")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -65,6 +66,17 @@ export type Marketplace = Receipts.Marketplace
 export type MemoryReceiptStore = Receipts.MemoryStore
 export type FakeMarketplace = Receipts.FakeMarketplace
 
+export type Guard = Guards.Guard
+export type GuardOptions = Guards.GuardOptions
+export type GuardRejectHook = Guards.RejectHook
+export type Cooldown = Guards.Cooldown
+export type CooldownOptions = Guards.CooldownOptions
+export type RoleResolver = Guards.Resolver
+export type RoleSource = Guards.RoleSource
+export type GuardPredicate = Guards.Predicate
+export type RangeOptions = Guards.RangeOptions
+export type GuardsConfigureOptions = Guards.ConfigureOptions
+
 return {
 	App = App,
 	define = Definition.define,
@@ -98,4 +110,6 @@ return {
 	State = State,
 	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
 	Receipts = Receipts,
+	-- Server-side rules for incoming traffic: cooldowns, roles and permissions, range checks, predicates.
+	Guards = Guards,
 }
