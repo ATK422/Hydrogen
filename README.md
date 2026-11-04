@@ -1,13 +1,15 @@
 # Hydrogen
 
-A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you four things:
+A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you:
 
 - **Systems**: modules with `init` / `start`, player (`playerAdded` / `playerRemoving`), character (`characterAdded` / `characterRemoving`) and shutdown (`stop`) hooks that run in dependency order.
 - **App**: collects your systems (and network definitions) and boots them.
 - **Network**: typed, schema-checked remote events and functions. Nothing fired during startup is lost, because events are queued until the network and each client are ready. Middleware inspects or transforms traffic, and a logger and a rate limiter are built in. Events can be unreliable, and batching and buffer encoding are there when traffic gets heavy.
 - **Testing**: `Hydrogen.test` runs your systems with fakes, fake players and a fake clock in one call, checks what was fired with expectations, and always cleans up. It runs in Studio and under Lune, with any test framework. Underneath, `app:replace` swaps a system for a fake and `Hydrogen.loopback` runs server and client systems together in one VM.
+- **The kit**: the modules most games end up writing themselves, each free until you use it. Saving with `Data`, per-player and replicated state with `PlayerState` and `State`, purchases with `Receipts`, cleanup with `Scope`, plus `Log`, `Signal`, `Scheduler`, tagged-instance `Component`s, client `Input`, server-side `Guards`, in-game `Commands`, `Config` and feature flags, and a `Debug` overlay.
+- **Tools**: `pesde x atk422/create_hydrogen` starts a new game, and `pesde x atk422/hydrogen_lint` checks its network before you playtest.
 
-Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current version: **0.4.0** (see [CHANGELOG.md](CHANGELOG.md)). License: MIT.
+Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current version: **0.5.0** (see [CHANGELOG.md](CHANGELOG.md)). License: MIT.
 
 ---
 
@@ -752,7 +754,7 @@ It boots your game twice under Lune, once as the server and once as the client, 
 - **duplicates**, after `Hydrogen.namespace` prefixes and the `State/<name>` events `Hydrogen.State` and PlayerState register
 - **late registrations**: objects first created in a `start` hook or after `app:start()`, with the line that required them
 - **mismatches**: a different `:Encode()`, schema or kind of object on each side
-- `serverFunction`s missing their curried returns, `clientFunction`s without `gt.args` / `gt.returns`, events nothing listens to, names that differ only by case, a State passed to `addNetwork` (which this version of Hydrogen loops on forever), script errors during the boot, and Hydrogen's own boot warnings
+- `serverFunction`s missing their curried returns, `clientFunction`s without `gt.args` / `gt.returns`, events nothing listens to, names that differ only by case, a module `addNetwork` would loop on forever (only possible on a pre-release Hydrogen build), script errors during the boot, and Hydrogen's own boot warnings
 
 Flags go after `--`: `--json` prints a JSON report for CI and agents, `--strict` fails on warnings too, `--ignore <rule>` drops a rule, and `--help` lists them all. The exit code is 0 with no errors, 1 with errors and 2 if the lint couldn't run. In CI:
 
@@ -2375,16 +2377,20 @@ Errors in hooks are warned and the other systems still run. Systems added after 
 
 1. Bump `version` in `pesde.toml` and run `pesde install` so `pesde.lock` picks it up.
 2. Add the release to `CHANGELOG.md`.
-3. Run the tests, then check what will be uploaded:
+3. Point the generator at the new version: `hydrogen` in `tools/create-hydrogen/src/versions.luau` and the `atk422/hydrogen` pin its test checks in `tools/create-hydrogen/test/run.luau`.
+4. Run the tests, then check what will be uploaded:
 
 ```bash
 pesde publish --dry-run
 ```
 
-4. Publish:
+5. Merge to `main` once CI passes. CI runs on Linux, so it catches what a Windows run doesn't (process errors, path separators).
+6. Publish:
 
 ```bash
 pesde publish
 ```
+
+7. Publish the tools that changed, after Hydrogen so they can install it. The generator changes whenever its Hydrogen pin does: from `tools/create-hydrogen/`, bump `version` in `pesde.toml` and `cli` in `src/versions.luau`, run `lune run test/run e2e` (it builds a game from the registry, so the new Hydrogen must be published), then `pesde publish`. The lint launcher only needs a release when `tools/hydrogen-lint/` itself changes: run `lune run test/run.luau` there, then `pesde publish`. Each tool's README has the details.
 
 Only files listed under `includes` in `pesde.toml` are published: the source, `pesde.toml`, `README.md`, `LICENSE`, `CHANGELOG.md`, and the agent docs (`AGENTS.md`, `llms.txt`, `docs/ai/*.md`; see `AGENTS.md` for their format and when to update them). `default.project.json` is deliberately left out so pesde generates the consumer layout.
