@@ -30,6 +30,9 @@ function Scaffold.overlays(answers: Options.Answers): { string }
 	if answers.ci then
 		table.insert(list, "ci")
 	end
+	if answers.agents then
+		table.insert(list, "agents")
+	end
 	for _, group in { { Options.tools, answers.tools }, { Options.kit, answers.kit } } do
 		local choices, chosen = group[1] :: { Options.Choice }, group[2] :: { [string]: boolean }
 		for _, choice in choices do
@@ -61,6 +64,7 @@ function Scaffold.vars(answers: Options.Answers, year: number?, branch: string?)
 		hydrogen_version = Versions.hydrogen,
 		examples = answers.examples,
 		ci = answers.ci,
+		agents = answers.agents,
 		lint = answers.tools.stylua or answers.tools.selene or answers.tools.luau_lsp or false,
 		pesde_engine = Versions.engines.pesde,
 		lune_engine = Versions.engines.lune,

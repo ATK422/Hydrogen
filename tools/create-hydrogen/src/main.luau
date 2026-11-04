@@ -55,12 +55,16 @@ print("\n" .. Scaffold.tree(outcome.files))
 if #outcome.skipped > 0 then
 	print("\n" .. color("yellow", "Not done:"))
 	for _, note in outcome.skipped do
-		print(`  - {note}`)
+		print("  - " .. string.gsub(note, "\n", "\n    "))
 	end
 end
 
 local answers = outcome.answers
-print("\n" .. color("green", "Done.") .. " Next:\n")
+if outcome.incomplete then
+	print("\n" .. color("yellow", "Project created; finish the steps above.") .. " Then:\n")
+else
+	print("\n" .. color("green", "Done.") .. " Next:\n")
+end
 if answers.directory ~= "." then
 	print(`  cd {answers.directory}`)
 end
@@ -69,3 +73,6 @@ print("  rojo serve                 sync into Studio with the Rojo plugin")
 print("  pesde run test             run the tests in test/")
 print("  rojo build -o game.rbxl    build a place file")
 print("")
+
+-- 3: the project is written, but a step it should have run was missing a tool or failed.
+process.exit(if outcome.incomplete then 3 else 0)

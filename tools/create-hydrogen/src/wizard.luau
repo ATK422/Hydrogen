@@ -33,6 +33,8 @@ export type Outcome = {
 	-- Steps that didn't happen, with what to do instead.
 	skipped: { string },
 	committed: boolean,
+	-- A step that should have run was missing a tool or failed (main exits with 3).
+	incomplete: boolean,
 }
 
 local Wizard = {}
@@ -209,6 +211,7 @@ function Wizard.answers(flags: Cli.Flags, env: Env): Options.Answers
 	end
 
 	local ci = boolean(flags.ci, "Add a GitHub Actions workflow (build, test, lint)?", defaults.ci)
+	local agents = boolean(flags.agents, "Add AGENTS.md and CLAUDE.md for coding agents?", defaults.agents)
 	local git = if flags.git ~= nil then flags.git else defaults.git
 	local install = if flags.install ~= nil then flags.install else defaults.install
 
@@ -221,6 +224,7 @@ function Wizard.answers(flags: Cli.Flags, env: Env): Options.Answers
 		license = license :: string,
 		examples = examples,
 		ci = ci,
+		agents = agents,
 		tools = tools :: { [string]: boolean },
 		kit = kit :: { [string]: boolean },
 		git = git,
@@ -270,6 +274,13 @@ function Wizard.run(flags: Cli.Flags, env: Env): Outcome
 
 	local skipped: { string } = {}
 	local committed = false
+	-- Set when a step that should have run didn't: a missing tool or a failure. Steps the user
+	-- turned off (--no-git, --no-install) and a repository that already exists don't count.
+	local incomplete = false
+	local function problem(text: string)
+		incomplete = true
+		table.insert(skipped, text)
+	end
 
 	-- The branch is decided up front because the CI workflow names it. A default the user set
 	-- in their global git config wins; otherwise main (Git for Windows' system config says
@@ -293,7 +304,7 @@ function Wizard.run(flags: Cli.Flags, env: Env): Outcome
 	local useGit = false
 	if answers.git then
 		if not hasGit then
-			table.insert(skipped, `git: not found. {Tools.install.git}`)
+			problem(`git: not found. {Tools.install.git}`)
 		else
 			local inside = env.run("git", { "rev-parse", "--show-toplevel" }, directory)
 			if inside and inside.ok and not fs.isDir(directory .. "/.git") then
@@ -312,7 +323,7 @@ function Wizard.run(flags: Cli.Flags, env: Env): Outcome
 				if result and result.ok then
 					useGit = true
 				else
-					table.insert(skipped, `git init failed: {failed(result)}`)
+					problem(`git init failed: {failed(result)}`)
 				end
 			end
 		end
@@ -321,7 +332,7 @@ function Wizard.run(flags: Cli.Flags, env: Env): Outcome
 	if answers.install then
 		local rokitVersion = Tools.version(env.run, "rokit", directory)
 		if not rokitVersion then
-			table.insert(skipped, `rokit install: Rokit isn't installed. {Tools.install.rokit}`)
+			problem(`rokit install: Rokit isn't installed. {Tools.install.rokit}`)
 		else
 			-- Interactive runs let Rokit ask about tools it hasn't seen; without a terminal it
 			-- can't, and the trust list is the user's to change, so that case is reported.
@@ -334,23 +345,22 @@ function Wizard.run(flags: Cli.Flags, env: Env): Outcome
 					for _, id in Wizard.rokitTools(answers) do
 						table.insert(repos, Versions.tools[id].repo)
 					end
-					table.insert(
-						skipped,
+					problem(
 						`rokit install: some tools aren't trusted yet. Run \`rokit install\` in the project and answer the questions, or trust them first with \`rokit trust {table.concat(repos, " ")}\`.`
 					)
 				else
-					table.insert(skipped, `rokit install failed: {failed(result)}. Run \`rokit install\` in the project to retry.`)
+					problem(`rokit install failed: {failed(result)}. Run \`rokit install\` in the project to retry.`)
 				end
 			end
 		end
 
 		if not Tools.version(env.run, "pesde", directory) then
-			table.insert(skipped, `pesde install: pesde isn't installed. {Tools.install.pesde}`)
+			problem(`pesde install: pesde isn't installed. {Tools.install.pesde}`)
 		else
 			step(env, "pesde install")
 			local result = env.run("pesde", { "install" }, directory, env.interactive)
 			if not (result and result.ok) then
-				table.insert(skipped, `pesde install failed: {failed(result)}. Run \`pesde install\` in the project to retry.`)
+				problem(`pesde install failed: {failed(result)}. Run \`pesde install\` in the project to retry.`)
 			else
 				-- luau-lsp regenerates this on its own; making it now means the editor works on first open.
 				local sourcemap = env.run("rojo", { "sourcemap", "default.project.json", "--output", "sourcemap.json" }, directory)
@@ -370,8 +380,7 @@ function Wizard.run(flags: Cli.Flags, env: Env): Outcome
 		if result and result.ok then
 			committed = true
 		else
-			table.insert(
-				skipped,
+			problem(
 				`git commit failed: {failed(result)}. If git doesn't know who you are yet, run \`git config --global user.name "Your Name"\` and \`git config --global user.email you@example.com\`, then \`git commit -m "First commit"\`.`
 			)
 		end
@@ -383,6 +392,7 @@ function Wizard.run(flags: Cli.Flags, env: Env): Outcome
 		files = files,
 		skipped = skipped,
 		committed = committed,
+		incomplete = incomplete,
 	}
 end
 

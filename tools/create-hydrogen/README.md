@@ -37,6 +37,7 @@ Arguments for the generator go after `--`, which tells pesde to pass them on.
 | Example systems, network module and test | yes | `--examples`, `--no-examples` |
 | Lint, format and type-check tools | StyLua, Selene and luau-lsp | `--tools stylua,selene,luau-lsp` or `--tools none` |
 | GitHub Actions workflow | yes | `--ci`, `--no-ci` |
+| `AGENTS.md` and `CLAUDE.md` for coding agents | yes | `--agents`, `--no-agents` |
 
 Other flags: `--no-git` (no `git init` or commit), `--no-install` (no `rokit install` or `pesde install`), `--force` (write into a directory that isn't empty; files with the same names are overwritten, others are left alone), `-y` / `--yes` (use the default for anything not given and ask nothing), `--help`, `--version`.
 
@@ -51,6 +52,19 @@ Project names can use letters, digits, `-`, `_` and `.`, start with a letter or 
 5. `git add -A` and the first commit, including `pesde.lock`.
 
 A step whose tool is missing or fails is listed at the end with what to do instead. The project is still written.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Done (steps turned off with `--no-git` / `--no-install` don't count against it) |
+| 1 | Stopped before writing anything: invalid value, directory not empty, or questions with no terminal |
+| 2 | Bad command line |
+| 3 | Project written, but a tool was missing or a git or install step failed (listed under "Not done") |
+
+### For coding agents
+
+[docs/ai/create.md](docs/ai/create.md) is written for agents that scaffold a project: every flag, the `--yes` defaults, the exit codes and what to do when a tool is missing. It ships in the package.
 
 ## The generated project
 
@@ -77,6 +91,8 @@ my-game/
     run.luau                 `pesde run test`: every *.test.luau with frktest
     Roblox.luau              loads game code under Lune through the Rojo sourcemap
     Greeter.test.luau        example tests with Hydrogen.loopback() and app:replace
+  AGENTS.md                  layout, commands and conventions for coding agents, and where Hydrogen's
+                             AI docs are installed (CLAUDE.md just says @AGENTS.md)
   .gitattributes  .gitignore  .luaurc  .styluaignore
   default.project.json       src/server -> ServerScriptService.Server, src/client -> StarterPlayerScripts.Client,
                              src/shared -> ReplicatedStorage.Shared, roblox_packages -> ReplicatedStorage.roblox_packages
@@ -126,8 +142,9 @@ tools/create-hydrogen/
     base/             always copied
     examples/         --examples
     starter/          --no-examples
-    ci/  stylua/  selene/   one folder per option
+    ci/  agents/  stylua/  selene/   one folder per option
     licenses/         LICENSE texts; MIT.tmpl gets the year and author
+  docs/ai/create.md   how coding agents should run the generator
   test/run.luau       the generator's tests
 ```
 
@@ -155,8 +172,9 @@ The first runs the unit tests: names, flags, the template language, every combin
 
 - Files ending in `.tmpl` are rendered; everything else is copied byte for byte. Rendering supports `{{variable}}`, `{{#if flag}} ... {{/if}}` and `{{#unless flag}} ... {{/unless}}`. A block tag alone on its line removes the line. Unknown variables and unclosed blocks are errors, and the tests render every combination, so a typo fails the tests instead of shipping.
 - Dotfiles are named `dot-x` in the template (`dot-gitignore`, `dot-vscode/`) so no packaging step skips them.
-- The variables come from `Scaffold.vars` in `src/scaffold.luau`: `name`, `package`, `description`, `author`, `license`, `year`, `branch`, `hydrogen_version`, `<tool>_tool` and `<tool>_version` for each Rokit tool, and a flag per option (`examples`, `ci`, `stylua`, `selene`, `luau_lsp`, `lint`, `has_author`, `has_license`, `kit_<id>`).
+- The variables come from `Scaffold.vars` in `src/scaffold.luau`: `name`, `package`, `description`, `author`, `license`, `year`, `branch`, `hydrogen_version`, `<tool>_tool` and `<tool>_version` for each Rokit tool, and a flag per option (`examples`, `ci`, `agents`, `stylua`, `selene`, `luau_lsp`, `lint`, `has_author`, `has_license`, `kit_<id>`).
 - Template code may only use Hydrogen's released API. After changing it, run `lune run test/run e2e`.
+- `template/agents/AGENTS.md.tmpl` lists the generated project's commands and conventions, and `docs/ai/create.md` lists the generator's flags and exit codes. Update them with the template and the flags. A test fails if a flag in `--help` is missing from `docs/ai/create.md`.
 
 ### Bumping versions
 

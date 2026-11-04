@@ -19,7 +19,7 @@ Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current v
 pesde x atk422/create_hydrogen
 ```
 
-It asks for a name and a few options, then sets up Rojo, Rokit, pesde, a booted `Hydrogen.App` on both sides, example systems, a test using `Hydrogen.loopback()`, editor settings and optionally StyLua, Selene, luau-lsp and GitHub Actions. It installs the tools and packages and makes the first commit. Pass `-- --help` for the flags, or `-- my-game --yes` to take every default. See [tools/create-hydrogen](tools/create-hydrogen/README.md).
+It asks for a name and a few options, then sets up Rojo, Rokit, pesde, a booted `Hydrogen.App` on both sides, example systems, a test using `Hydrogen.loopback()`, editor settings and optionally StyLua, Selene, luau-lsp and GitHub Actions. It installs the tools and packages and makes the first commit. Pass `-- --help` for the flags, or `-- my-game --yes` to take every default. See [tools/create-hydrogen](tools/create-hydrogen/README.md). Coding agents scaffolding a game should read [tools/create-hydrogen/docs/ai/create.md](tools/create-hydrogen/docs/ai/create.md).
 
 ### Install into an existing project
 

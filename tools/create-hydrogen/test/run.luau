@@ -104,6 +104,7 @@ local function answers(overrides: { [string]: any }?): Options.Answers
 		license = "MIT",
 		examples = true,
 		ci = true,
+		agents = true,
 		tools = { stylua = true, selene = true, luau_lsp = true },
 		kit = {},
 		git = true,
@@ -322,6 +323,18 @@ group("Cli.parse", function()
 		lacks(help, "LICENSES", "help")
 		lacks(help, "KIT_LINE", "help")
 	end)
+
+	test("the agent docs cover every flag in --help", function()
+		local source = debug.info(1, "s") :: string
+		local root = string.match(string.gsub(source, "\\", "/"), "^(.*)/test/[^/]+$") or "."
+		local docs = fs.readFile(root .. "/docs/ai/create.md")
+		for flag in string.gmatch(Cli.help(), "%-%-[%w%-]+") do
+			contains(docs, "`" .. flag, "docs/ai/create.md")
+		end
+		for _, code in { "| 0 |", "| 1 |", "| 2 |", "| 3 |" } do
+			contains(docs, code, "docs/ai/create.md exit codes")
+		end
+	end)
 end)
 
 group("Render", function()
@@ -412,7 +425,9 @@ group("Scaffold.plan", function()
 			for _, ci in { true, false } do
 				for _, toolSet in { { stylua = true, selene = true, luau_lsp = true }, { stylua = false, selene = false, luau_lsp = false }, { stylua = true, selene = false, luau_lsp = false }, { stylua = false, selene = true, luau_lsp = true } } do
 					for _, license in { "MIT", "Apache-2.0", "MPL-2.0", "None" } do
-						table.insert(combos, { examples = examples, ci = ci, tools = toolSet, license = license })
+						for _, agents in { true, false } do
+							table.insert(combos, { examples = examples, ci = ci, tools = toolSet, license = license, agents = agents })
+						end
 					end
 				end
 			end
@@ -464,6 +479,50 @@ group("Scaffold.plan", function()
 		truthy(files["test/run.luau"], "the test runner is always there")
 	end)
 
+	test("agent docs: AGENTS.md matches the chosen tools, CLAUDE.md points at it", function()
+		local all = plan()
+		equal(all["CLAUDE.md"], "@AGENTS.md\n")
+		local agents = all["AGENTS.md"]
+		for _, needle in {
+			"roblox_packages/.pesde/atk422+hydrogen/*/hydrogen/llms.txt",
+			"roblox_packages/.pesde/atk422+hydrogen/*/hydrogen/docs/ai/*.md",
+			"rokit install",
+			"pesde install",
+			"rojo build default.project.json",
+			"rojo serve",
+			"rojo sourcemap default.project.json --output sourcemap.json",
+			"pesde run test",
+			"selene src test",
+			"stylua --check src test",
+			"luau-lsp analyze",
+			"before `app:start()`",
+			"One system per ModuleScript",
+			"Strict mode",
+			"developer experience",
+			"reliability",
+			"performance",
+		} do
+			contains(agents, needle, "AGENTS.md")
+		end
+		contains(all["README.md"], "AGENTS.md")
+
+		local bare = plan({ agents = true, ci = false, tools = { stylua = false, selene = false, luau_lsp = false } })
+		lacks(bare["AGENTS.md"], "selene")
+		lacks(bare["AGENTS.md"], "stylua")
+		lacks(bare["AGENTS.md"], "luau-lsp analyze")
+
+		local none = plan({ agents = false })
+		equal(none["AGENTS.md"], nil, "AGENTS.md")
+		equal(none["CLAUDE.md"], nil, "CLAUDE.md")
+		lacks(none["README.md"], "AGENTS.md")
+	end)
+
+	test("AGENTS.md's package path is where pesde installs Hydrogen", function()
+		-- pesde puts a package's files (README.md included) at .pesde/<scope>+<name>/<version>/<name>/.
+		-- The e2e test checks this on a real install.
+		contains(plan()["AGENTS.md"], "roblox_packages/.pesde/atk422+hydrogen/*/hydrogen/README.md")
+	end)
+
 	test("escapes TOML strings and names the CI branch", function()
 		local files = plan({ description = 'Say "hi" \\ bye', author = 'A "B"' }, "trunk")
 		local manifest = serde.decode("toml", files["pesde.toml"])
@@ -491,7 +550,7 @@ group("Scaffold.plan", function()
 		fs.writeDir(root .. "/starter")
 		fs.writeFile(root .. "/base/plain.txt", "one\r\ntwo\r\n")
 		fs.writeFile(root .. "/base/named.txt.tmpl", "{{#if examples}}\r\nx\r\n{{/if}}\r\n{{name}}\r\n")
-		local a = answers({ examples = false, ci = false, tools = {}, license = "None" })
+		local a = answers({ examples = false, ci = false, agents = false, tools = {}, license = "None" })
 		local files = byPath(Scaffold.plan(a, Scaffold.vars(a, 2026), root))
 		equal(files["plain.txt"], "one\ntwo\n")
 		equal(files["named.txt"], "my-game\n")
@@ -581,9 +640,10 @@ group("Wizard.answers", function()
 			2, -- tools: let me pick
 			{ 1 }, -- just StyLua
 			false, -- CI
+			true, -- agent docs
 		})
 		local a = Wizard.answers(flags({}), (env(tempDir(), { prompter = prompter })))
-		equal(#asked, 9)
+		equal(#asked, 10)
 		equal(a.name, "space-race")
 		equal(a.description, Options.defaults.description)
 		equal(a.author, "Someone")
@@ -593,12 +653,13 @@ group("Wizard.answers", function()
 		equal(a.tools.stylua, true)
 		equal(a.tools.selene, false)
 		equal(a.ci, false)
+		equal(a.agents, true)
 	end)
 
 	test("flags skip their questions", function()
 		local prompter, asked = Prompts.scripted({ "", "" }) -- description, package
 		Wizard.answers(
-			flags({ "my-game", "--author", "A", "--license", "MIT", "--no-examples", "--tools", "none", "--ci" }),
+			flags({ "my-game", "--author", "A", "--license", "MIT", "--no-examples", "--tools", "none", "--ci", "--agents" }),
 			(env(tempDir(), { prompter = prompter }))
 		)
 		equal(#asked, 2)
@@ -612,6 +673,7 @@ group("Wizard.run", function()
 		local outcome = Wizard.run(flags({ "game", "--yes" }), (env(cwd, { run = run })))
 		equal(#outcome.skipped, 0, skippedText(outcome))
 		equal(outcome.committed, true)
+		equal(outcome.incomplete, false)
 		truthy(fs.isFile(cwd .. "/game/default.project.json"), "files written")
 		truthy(ran(calls, "git init --initial-branch=main"), "git init")
 		truthy(ran(calls, "rokit install"), "rokit install")
@@ -638,6 +700,7 @@ group("Wizard.run", function()
 		contains(text, "pesde isn't installed")
 		contains(text, "docs.pesde.dev")
 		equal(outcome.committed, false)
+		equal(outcome.incomplete, true, "missing tools make the run incomplete (exit code 3)")
 		truthy(fs.isFile(cwd .. "/game/pesde.toml"), "files are still written")
 	end)
 
@@ -648,6 +711,7 @@ group("Wizard.run", function()
 			truthy(call.args[1] == "config" or call.args[1] == "--version", `only lookups, not {call.program} {table.concat(call.args, " ")}`)
 		end
 		contains(skippedText(outcome), "--no-install")
+		equal(outcome.incomplete, false, "steps turned off don't make the run incomplete")
 	end)
 
 	test("a non-empty directory is refused, then allowed with --force", function()
@@ -666,7 +730,7 @@ group("Wizard.run", function()
 		local cwd = tempDir()
 		fs.writeDir(cwd .. "/game")
 		fs.writeFile(cwd .. "/game/keep.txt", "mine")
-		local args = { "game", "--description", "d", "--author", "a", "--package", "abc/game", "--license", "MIT", "--examples", "--tools", "none", "--ci", "--no-git", "--no-install" }
+		local args = { "game", "--description", "d", "--author", "a", "--package", "abc/game", "--license", "MIT", "--examples", "--tools", "none", "--ci", "--agents", "--no-git", "--no-install" }
 		local no = Prompts.scripted({ false })
 		errors(function()
 			Wizard.run(flags(args), (env(cwd, { prompter = no })))
@@ -684,6 +748,7 @@ group("Wizard.run", function()
 		contains(skippedText(outcome), "already inside the repository at C:/work/monorepo")
 		equal(ran(calls, "git init --initial-branch=main"), false, "git init")
 		equal(outcome.committed, false)
+		equal(outcome.incomplete, false, "an existing repository isn't a failure")
 	end)
 
 	test("a global default branch is used for git and CI", function()
@@ -727,6 +792,7 @@ group("Wizard.run", function()
 		})
 		local outcome = Wizard.run(flags({ "game", "--yes", "--no-git" }), (env(tempDir(), { run = run })))
 		contains(skippedText(outcome), "pesde install failed: network down")
+		equal(outcome.incomplete, true)
 	end)
 end)
 
@@ -772,6 +838,18 @@ if process.args[1] == "e2e" then
 		check("pesde run test", "pesde", { "run", "test" })
 		check("stylua --check", "stylua", { "--check", "src", "test" })
 		check("selene", "selene", { "src", "test" })
+
+		test("Hydrogen's package files are where AGENTS.md says", function()
+			local base = project .. "/roblox_packages/.pesde/atk422+hydrogen"
+			local versions = fs.readDir(base)
+			equal(#versions, 1, "installed Hydrogen versions")
+			local packageDir = `{base}/{versions[1]}/hydrogen`
+			truthy(fs.isFile(packageDir .. "/README.md"), `{packageDir}/README.md`)
+			truthy(fs.isDir(packageDir .. "/src"), `{packageDir}/src`)
+			if not fs.isFile(packageDir .. "/llms.txt") then
+				print(`note: Hydrogen {versions[1]} doesn't ship llms.txt yet; AGENTS.md falls back to README.md`)
+			end
+		end)
 
 		test("the commit has the project and the lockfile", function()
 			local result = Tools.exec("git", { "ls-files" }, project) :: Tools.Result

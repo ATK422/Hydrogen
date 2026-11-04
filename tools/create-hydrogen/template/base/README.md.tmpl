@@ -70,6 +70,9 @@ test/
 default.project.json       Rojo project: maps src/ into the DataModel
 pesde.toml                 packages (Hydrogen) and the `test` script
 rokit.toml                 pinned tool versions
+{{#if agents}}
+AGENTS.md                  notes for coding agents (CLAUDE.md points to it)
+{{/if}}
 ```
 
 Packages install to `roblox_packages/`, which Rojo maps to `ReplicatedStorage.roblox_packages`, so game code requires Hydrogen with `require(ReplicatedStorage.roblox_packages.hydrogen)`.

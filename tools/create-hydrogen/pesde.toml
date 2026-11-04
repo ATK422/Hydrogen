@@ -10,6 +10,7 @@ includes = [
 	"LICENSE",
 	"src/**/*.luau",
 	"template/**",
+	"docs/**",
 ]
 
 [target]

@@ -13,6 +13,7 @@ export type Flags = {
 	license: string?,
 	examples: boolean?,
 	ci: boolean?,
+	agents: boolean?,
 	tools: { [string]: boolean }?,
 	kit: { [string]: boolean }?,
 	git: boolean?,
@@ -38,6 +39,7 @@ local VALUE_FLAGS = {
 local BOOLEAN_FLAGS = {
 	examples = true,
 	ci = true,
+	agents = true,
 	git = true,
 	install = true,
 }
@@ -153,12 +155,19 @@ Options:
                            example systems, network module and test (default: on)
   --tools <list>           stylua, selene, luau-lsp or none (default: all three)
 KIT_LINE  --ci, --no-ci            GitHub Actions workflow (default: on)
+  --agents, --no-agents    AGENTS.md and CLAUDE.md for coding agents (default: on)
   --no-git                 don't run git init or make the first commit
   --no-install             don't run rokit install and pesde install
   -f, --force              write into a directory that isn't empty
   -y, --yes                use defaults for everything not given, ask nothing
   -h, --help               show this help
   -v, --version            show the version
+
+Exit codes:
+  0  done (steps you turned off with --no-git or --no-install don't count)
+  1  nothing written: invalid value, directory not empty, or no terminal to ask in
+  2  bad command line
+  3  project written, but a tool was missing or a git/install step failed (see "Not done")
 
 Examples:
   pesde x atk422/create_hydrogen
