@@ -484,6 +484,59 @@ return function()
 			return nil
 		end)
 
+		test.case("observeAll sees every player's value, existing ones first", function()
+			local net, players = start("Alice", "Bob")
+			local alice, bob = players[1], players[2]
+			local Level, Coins = defs.Level, defs.Coins
+
+			Level:set(alice, 3)
+			Coins:set(alice, 40)
+			Coins:set(bob, 7)
+			State.flush()
+
+			local server: { { any } } = {}
+			Level:observeAll(function(player, value, previous)
+				table.insert(server, { player, value, previous })
+			end)
+			check.equal(#server, 1)
+			check.equal(server[1][1], alice)
+			check.equal(server[1][2], 3)
+
+			local onBob: { { any } } = {}
+			local bobCoins: { { any } } = {}
+			net:as(bob, function()
+				Level:observeAll(function(player, value, previous)
+					table.insert(onBob, { player, value, previous })
+				end)
+				Coins:observeAll(function(player, value)
+					table.insert(bobCoins, { player, value })
+				end)
+			end)
+			check.equal(#onBob, 1)
+			check.equal(onBob[1][1], alice)
+			-- Owner-only state: Bob's client only ever has his own.
+			check.equal(#bobCoins, 1)
+			check.equal(bobCoins[1][1], bob)
+			check.equal(bobCoins[1][2], 7)
+
+			Level:set(bob, 5)
+			Level:set(alice, 4)
+			check.equal(#server, 3)
+			check.equal(#onBob, 1)
+			State.flush()
+			check.equal(#onBob, 3)
+			check.equal(onBob[2][1], bob)
+			check.equal(onBob[2][2], 5)
+			check.equal(onBob[3][1], alice)
+			check.equal(onBob[3][2], 4)
+			check.equal(onBob[3][3], 3)
+
+			Coins:set(alice, 41)
+			State.flush()
+			check.equal(#bobCoins, 1)
+			return nil
+		end)
+
 		test.case("computed state follows the copy it is read from", function()
 			local net, players = start("Alice")
 			local alice = players[1]

@@ -17,7 +17,16 @@ end
 
 local function emit(state: Def, ctx: any, cell: Cell, new: any, old: any)
 	Store.notify(state.name, cell.observers, new, old)
+	Store.notifyAll(state, ctx, cell, new, old)
 	Store.changed(state, ctx)
+end
+
+local function current(cell: Cell): ...any
+	return cell.data, nil
+end
+
+function Value.observeAll(state: Def, observer: (...any) -> ()): () -> ()
+	return Store.observeAll(state, observer, current)
 end
 
 function Value.initial(state: Def): any

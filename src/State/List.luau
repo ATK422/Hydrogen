@@ -20,10 +20,23 @@ local SNAPSHOT_SLACK = 8
 local List = {}
 
 local function emit(state: Def, ctx: any, cell: Cell)
-	if cell.observers and #cell.observers > 0 then
-		Store.notify(state.name, cell.observers, table.clone(cell.data))
+	local observed = cell.observers ~= nil and #cell.observers > 0
+	if observed or Store.hasAllObservers(state, ctx) then
+		local items = table.clone(cell.data)
+		if observed then
+			Store.notify(state.name, cell.observers, items)
+		end
+		Store.notifyAll(state, ctx, cell, items)
 	end
 	Store.changed(state, ctx)
+end
+
+local function current(cell: Cell): ...any
+	return table.clone(cell.data)
+end
+
+function List.observeAll(state: Def, observer: (...any) -> ()): () -> ()
+	return Store.observeAll(state, observer, current)
 end
 
 local function wireAll(state: Def, items: { any }): { any }

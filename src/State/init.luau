@@ -93,6 +93,8 @@ export type PlayerValue<T> = {
 	set: (self: PlayerValue<T>, player: Player, value: T) -> (),
 	update: (self: PlayerValue<T>, player: Player, transform: (current: T) -> T) -> (),
 	observe: (self: PlayerValue<T>, player: Player, observer: (value: T, previous: T?) -> ()) -> Disconnect,
+	-- Every player's value: called now for each player whose value exists here, then on each change.
+	observeAll: (self: PlayerValue<T>, observer: (player: Player, value: T, previous: T?) -> ()) -> Disconnect,
 }
 
 export type PlayerMap<K, V> = {
@@ -107,6 +109,7 @@ export type PlayerMap<K, V> = {
 	replace: (self: PlayerMap<K, V>, player: Player, entries: { [K]: V }) -> (),
 	clear: (self: PlayerMap<K, V>, player: Player) -> (),
 	observe: (self: PlayerMap<K, V>, player: Player, observer: (entries: { [K]: V }) -> ()) -> Disconnect,
+	observeAll: (self: PlayerMap<K, V>, observer: (player: Player, entries: { [K]: V }) -> ()) -> Disconnect,
 	observeKey: (self: PlayerMap<K, V>, player: Player, key: K, observer: (value: V?) -> ()) -> Disconnect,
 	onChange: (self: PlayerMap<K, V>, player: Player, listener: (key: K, value: V?, previous: V?) -> ()) -> Disconnect,
 }
@@ -124,6 +127,7 @@ export type PlayerList<T> = {
 	replace: (self: PlayerList<T>, player: Player, items: { T }) -> (),
 	clear: (self: PlayerList<T>, player: Player) -> (),
 	observe: (self: PlayerList<T>, player: Player, observer: (items: { T }) -> ()) -> Disconnect,
+	observeAll: (self: PlayerList<T>, observer: (player: Player, items: { T }) -> ()) -> Disconnect,
 }
 
 export type Computed<T> = Computed.Computed<T>
@@ -368,13 +372,21 @@ local function playerMethods(ops: Ops): { [string]: any }
 	return methods
 end
 
+-- observeAll takes no player: it covers all of them.
+local function withObserveAll(methods: { [string]: any }, observeAll: (state: any, observer: (...any) -> ()) -> () -> ())
+	methods.observeAll = function(self: any, observer: (...any) -> ())
+		return observeAll(self, observer)
+	end
+	return methods
+end
+
 local metatables = {
 	value = { __index = globalMethods(ValueOps) },
 	map = { __index = globalMethods(MapOps) },
 	list = { __index = globalMethods(ListOps) },
-	playerValue = { __index = playerMethods(ValueOps) },
-	playerMap = { __index = playerMethods(MapOps) },
-	playerList = { __index = playerMethods(ListOps) },
+	playerValue = { __index = withObserveAll(playerMethods(ValueOps), Value.observeAll) },
+	playerMap = { __index = withObserveAll(playerMethods(MapOps), Map.observeAll) },
+	playerList = { __index = withObserveAll(playerMethods(ListOps), List.observeAll) },
 }
 
 --------------------------------------------------------------------------------
@@ -454,6 +466,7 @@ local function define(spec: Spec): any
 		unwire = if serializer then serializer.deserialize else identity,
 		global = {},
 		players = {},
+		everyone = {},
 		watchers = {},
 		_check = check,
 		_keyCheck = if spec.keySchema ~= nil then Wire.build(spec.keySchema) else nil,

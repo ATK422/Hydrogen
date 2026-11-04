@@ -19,6 +19,8 @@ export type Cell = {
 	dirty: boolean,
 	-- Per-player cells: whose cell it is, as sent on the wire.
 	userId: number?,
+	-- Per-player cells: the owning Player once known, held weakly so the cell doesn't keep it alive.
+	owner: { Player }?,
 	-- Maps: keys changed since the last flush.
 	keys: { [any]: boolean }?,
 	-- Lists: (op, index) pairs since the last flush, and the values of the ops that carry one.
@@ -66,6 +68,8 @@ export type Def = Source & {
 	-- player's state stays readable in later playerRemoving hooks and is freed with the player.
 	-- Replicas key by UserId, which is what the wire carries.
 	players: { [any]: { [any]: Cell } },
+	-- Context -> observers of every player's cell (per-player state's observeAll).
+	everyone: { [any]: { (...any) -> () } },
 }
 
 type Pending = {
@@ -177,9 +181,39 @@ function Store.cellAt(state: Def, ctx: any, key: any, create: boolean): Cell?
 	local cell = (cells :: any)[key]
 	if not cell and create then
 		cell = newCell(state, if ctx == SERVER then key.UserId else key)
+		if ctx == SERVER then
+			cell.owner = setmetatable({ key }, { __mode = "v" }) :: any
+		end
 		;(cells :: any)[key] = cell
 	end
 	return cell
+end
+
+-- The player a per-player cell belongs to. Replicas only know the UserId, so they look the player
+-- up the first time it is needed. nil if that player isn't in the game.
+function Store.ownerOf(cell: Cell): Player?
+	local box = cell.owner
+	local player = box and box[1]
+	if player or not cell.userId then
+		return player
+	end
+
+	local userId = cell.userId
+	if Runtime.Loopback then
+		for _, candidate in Runtime:getPlayers() do
+			if candidate.UserId == userId then
+				player = candidate
+				break
+			end
+		end
+	else
+		player = Players:GetPlayerByUserId(userId)
+	end
+
+	if player then
+		cell.owner = setmetatable({ player }, { __mode = "v" }) :: any
+	end
+	return player
 end
 
 function Store.cell(state: Def, ctx: any, player: Player?, create: boolean): Cell?
@@ -272,6 +306,48 @@ function Store.notify(name: string, observers: { (...any) -> () }?, ...: any)
 	for _, observer in table.clone(observers) do
 		Store.call(name, observer, ...)
 	end
+end
+
+-- Tells observeAll observers of a per-player state that one player's cell changed: (player, ...).
+function Store.notifyAll(state: Def, ctx: any, cell: Cell, ...: any)
+	if not state.perPlayer then
+		return
+	end
+	local observers = state.everyone[ctx]
+	if not observers or #observers == 0 then
+		return
+	end
+	local player = Store.ownerOf(cell)
+	if player then
+		Store.notify(state.name, observers, player, ...)
+	end
+end
+
+function Store.hasAllObservers(state: Def, ctx: any): boolean
+	local observers = state.everyone[ctx]
+	return observers ~= nil and #observers > 0
+end
+
+-- Observes every player's cell in the running context. Calls observer now for each player who
+-- has a cell, with what current(cell) returns, then on each change.
+function Store.observeAll(state: Def, observer: (...any) -> (), current: (cell: Cell) -> ...any): () -> ()
+	local ctx = Store.context()
+	local observers = state.everyone[ctx] or {}
+	state.everyone[ctx] = observers
+	local disconnect = Store.add(observers, observer)
+
+	-- Collected first: an observer that writes could add cells while this loops.
+	local existing = {}
+	for _, cell in state.players[ctx] or {} do
+		table.insert(existing, cell)
+	end
+	for _, cell in existing do
+		local player = Store.ownerOf(cell)
+		if player then
+			Store.within(ctx, Store.call, state.name, observer, player, current(cell))
+		end
+	end
+	return disconnect
 end
 
 -- Adds to a list and returns a function that removes it again.
@@ -392,6 +468,11 @@ local function dropReplication()
 		for ctx in state.players do
 			if ctx ~= SERVER then
 				state.players[ctx] = nil
+			end
+		end
+		for ctx in state.everyone do
+			if ctx ~= SERVER then
+				state.everyone[ctx] = nil
 			end
 		end
 	end
@@ -574,6 +655,7 @@ function Store.reset()
 	for _, state in Store.states do
 		table.clear(state.global)
 		table.clear(state.players)
+		table.clear(state.everyone)
 	end
 	for _, computed in Store.computeds do
 		computed:reset()

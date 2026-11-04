@@ -30,10 +30,23 @@ local function emit(state: Def, ctx: any, cell: Cell, changes: { Change })
 		end
 		Store.notify(state.name, cell.listeners, change.key, change.value, change.previous)
 	end
-	if cell.observers and #cell.observers > 0 then
-		Store.notify(state.name, cell.observers, table.clone(cell.data))
+	local observed = cell.observers ~= nil and #cell.observers > 0
+	if observed or Store.hasAllObservers(state, ctx) then
+		local entries = table.clone(cell.data)
+		if observed then
+			Store.notify(state.name, cell.observers, entries)
+		end
+		Store.notifyAll(state, ctx, cell, entries)
 	end
 	Store.changed(state, ctx)
+end
+
+local function current(cell: Cell): ...any
+	return table.clone(cell.data)
+end
+
+function Map.observeAll(state: Def, observer: (...any) -> ()): () -> ()
+	return Store.observeAll(state, observer, current)
 end
 
 function Map.initial(_state: Def): any

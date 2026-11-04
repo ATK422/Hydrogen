@@ -488,7 +488,7 @@ There is nothing to add to the app: defining a state registers its network event
 | `State.value(name, schema, initial)` | one value | everyone | `set`, `update` | `get`, `observe` |
 | `State.map(name, keySchema, valueSchema)` | key → value | everyone | `set` (nil removes), `remove`, `update`, `replace`, `clear` | `get`, `all`, `size`, `observe`, `observeKey`, `onChange` |
 | `State.list(name, itemSchema)` | array | everyone | `push`, `insert`, `remove`, `set`, `replace`, `clear` | `get`, `all`, `size`, `observe` |
-| `State.playerValue` / `playerMap` / `playerList` | the same, per player | the owner, or everyone with `visibleTo = "everyone"` | the same, player first: `Coins:set(player, 10)` | the same, player first: `Coins:get(player)` |
+| `State.playerValue` / `playerMap` / `playerList` | the same, per player | the owner, or everyone with `visibleTo = "everyone"` | the same, player first: `Coins:set(player, 10)` | the same, player first: `Coins:get(player)`; plus `observeAll(fn(player, ...))` for every player |
 | `State.computed(fn)` | `fn()` | each side computes its own | none | `get`, `observe` |
 
 Options, as the last argument:
@@ -504,12 +504,12 @@ Rules worth knowing:
 - **Writes in one frame go out together.** At the end of the frame each changed state sends one message (one per changed player, for per-player state), however many writes it took. Maps send only the changed and removed keys; `replace(entries)` works out the difference for you. Lists send the inserts, removes and sets, or the whole list when that is smaller. Call `State.flush()` to send now, e.g. before firing an event whose listeners expect the new state.
 - **Late joiners get a snapshot.** When a player joins, they are sent everything already written that they may see, then every change after it. It arrives in the ready handshake, so client systems see it in `start`.
 - **Players leaving.** Other clients drop a departed player's state. On the server it stays readable, so a later `playerRemoving` hook can still save it, and is freed with the player. Writes for a player who left are applied on the server and not sent.
-- **Observers** get the current value immediately, then each change, and return a disconnect function. Map and list observers get a copy of the whole collection; use `observeKey` or `onChange` for one key at a time. An observer that errors is reported with `[HYDROGEN] Observer of State <name> failed` without stopping the others, and one that yields doesn't hold up the write.
+- **Observers** get the current value immediately, then each change, and return a disconnect function. Map and list observers get a copy of the whole collection; use `observeKey` or `onChange` for one key at a time. Per-player state's `observeAll(function(player, value, previous) end)` watches every player at once, e.g. for a leaderboard: it is called now for each player whose state exists on this side, then on every change. A player whose state was never written has the initial value and isn't called until it changes. An observer that errors is reported with `[HYDROGEN] Observer of State <name> failed` without stopping the others, and one that yields doesn't hold up the write.
 - **Computed state** is a function of other state: `State.computed(function() return Round:get() == "Playing" and Timer:get() > 0 end)`. It depends on whatever it read, through other computed state too, and is never sent: each client computes it from its replicas. It must not yield.
 - Messages are validated on the client like any server event, and go through middleware: `GameState.Round.event` is the underlying `serverEvent`, and `Hydrogen.logger()` shows `State/Round`. With `App.new({ batching = true })` state messages are batched like any other event.
 - **Under `Hydrogen.loopback`**, each fake client has its own replica: code inside `net:as(player, fn)` reads that client's copy, and code outside reads the server's. `State.reset()` puts every state back to its initial value and drops observers; call it between tests.
 
-For other kit modules: per-player state is the layer PlayerState-style modules sit on. Create a `playerValue`, `playerMap` or `playerList` per field from a shared module, choose `visibleTo` per field, and write to it as the data changes; State handles snapshots, diffs and departures.
+For other kit modules: per-player state is the layer PlayerState-style modules sit on. Create a `playerValue`, `playerMap` or `playerList` per field from a shared module, choose `visibleTo` per field, and write to it as the data changes; State handles snapshots, diffs and departures. On the client, `observeAll` gives a per-field changed signal across players.
 
 #### Why it's designed this way
 
@@ -634,7 +634,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 96 | Passed: 96` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 97 | Passed: 97` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
