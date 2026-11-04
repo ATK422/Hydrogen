@@ -1142,7 +1142,8 @@ Game passes:
 The store is where Receipts records that a purchase was granted. A purchase is granted exactly once only if that record is saved **together with** the grant: both saved, or neither. Saved separately, a crash between the two saves either grants the purchase twice or loses it.
 
 - **`Receipts.dataStore(name?)`** (the default, named `HydrogenReceipts`): one DataStore key per purchase id, written after the handler returns and tagged with the player's UserId. Players who never buy anything cost no requests. Reads and writes are retried twice, and a record still unsaved is tried once more when the player leaves. Because it can't share a save with your game's data, a crash or failed save between your data and this record can grant a purchase twice (your data saved, the record didn't) or lose it (the other way round). Use it when your data lives somewhere Receipts can't reach.
-- **Your data system as the store** (recommended): implement `Hydrogen.ReceiptStore` on top of your player data, keeping the processed purchase ids in the player's profile. Keep that list bounded (the last few hundred ids is plenty), and don't let a save go out while `record` is between `grant()` and adding the id. If your data system already has an apply-once update (run a change and record an id in one commit, then save), `record` can wrap it and `isGranted` can return `false`. Return from `record` without calling `grant` when the update reports a duplicate. `save` must still save the player's data and error on failure, because Receipts retries through it when the update's change was committed but its save failed.
+- **`Receipts.fromData(PlayerData)`** (recommended with `Hydrogen.Data`): records the purchase id with the grant through `PlayerData:updateOnce`, so both are in one save. Handlers get the player's draft data after the receipt and change it: `Receipts.product(id, function(player, receipt, data) data.coins += 100 end)`. Configure it with `Hydrogen.Receipts.configure({ store = Hydrogen.Receipts.fromData(PlayerData) })` and add the store to the app.
+- **Another data system as the store**: implement `Hydrogen.ReceiptStore` on top of your player data, keeping the processed purchase ids in the player's profile. Keep that list bounded (the last few hundred ids is plenty), and don't let a save go out while `record` is between `grant()` and adding the id. If your data system already has an apply-once update (run a change and record an id in one commit, then save), `record` can wrap it and `isGranted` can return `false`. Return from `record` without calling `grant` when the update reports a duplicate. `save` must still save the player's data and error on failure, because Receipts retries through it when the update's change was committed but its save failed.
 
 ```luau
 export type ReceiptStore = {
@@ -1224,10 +1225,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 106 | Passed: 106` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
-Expected output ends with `Tests Ran: 108 | Passed: 108` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
-Expected output ends with `Tests Ran: 97 | Passed: 97` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
-Expected output ends with `Tests Ran: 101 | Passed: 101` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 200 | Passed: 200` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -1248,6 +1246,31 @@ src/
     ClientEvent.luau   ServerEvent.luau  ClientFunction.luau  ServerFunction.luau
   Scope/
     init.luau          Scope: cleanup tied to lifetimes; Scope.of looks up the scopes App keeps
+  Data/
+    init.luau          re-exports Stores and its types
+    Stores.luau        Data.player / Data.store systems, backend selection
+    Store.luau         sessions: load and lock, update, transactions, updateOnce, saving, autosave
+    Backend.luau       backend type, in-memory backend, Roblox DataStore backend
+    Tables.luau        copy, deep freeze, reconcile, structural sharing
+    Clock.luau         Data's time sources, forwarding to Hydrogen.Clock
+  PlayerState/
+    init.luau          re-exports Define and its types
+    Define.luau        PlayerState.new: fields, proxies, lifecycle
+    Replication.luau   one State.playerValue per replicated field, per-field audiences, client views
+  State/
+    init.luau          public API, types, write checks
+    Store.luau         cells per context (server / replica), subscriptions, flush, snapshots, receive
+    Wire.luau          one serverEvent per state, payload schemas per kind
+    Value.luau  Map.luau  List.luau   how each kind diffs, applies and notifies
+    Computed.luau      derived state with dependency tracking
+    Schedule.luau      the end-of-frame flush, on Hydrogen.Clock
+  Receipts/
+    init.luau          exports the Receipts system and its types
+    Receipts.luau      the system: ProcessReceipt routing, waiting for players, game passes
+    Stores.luau        dataStore, memoryStore and fromData (Hydrogen.Data)
+    FakeMarketplace.luau  stand-in MarketplaceService for tests
+    Types.luau         Receipt, ReceiptStore, Marketplace, options
+    Clock.luau  Log.luau  time sources and warnings, forwarding to Hydrogen.Clock and the log; tests can patch them
   Testing/
     init.luau          Hydrogen.test and Hydrogen.harness
     Expect.luau        expectations on deliveries, argument matching, failure messages
@@ -1257,39 +1280,11 @@ test/
   App.luau  Clock.luau  Definition.luau  Graph.luau  Network.luau
   Testing.luau         Hydrogen.test, app:replace and Hydrogen.loopback, used the way a game's tests would
   Scope.luau           Scope on its own, and the system and player scopes an app keeps
-  Fixtures/            modules the suites require
-  Data/
-    init.luau          re-exports Stores and its types
-    Stores.luau        Data.player / Data.store systems, backend selection
-    Store.luau         sessions: load and lock, update, transactions, updateOnce, saving, autosave
-    Backend.luau       backend type, in-memory backend, Roblox DataStore backend
-    Tables.luau        copy, deep freeze, reconcile, structural sharing
-    Clock.luau         time sources, swappable by tests
-  PlayerState/
-    init.luau          re-exports Define and its types
-    Define.luau        PlayerState.new: fields, proxies, lifecycle
-    Replication.luau   per-field audiences, coalesced sends, client replicas
-  State/
-    init.luau          public API, types, write checks
-    Store.luau         cells per context (server / replica), subscriptions, flush, snapshots, receive
-    Wire.luau          one serverEvent per state, payload schemas per kind
-    Value.luau  Map.luau  List.luau   how each kind diffs, applies and notifies
-    Computed.luau      derived state with dependency tracking
-    Schedule.luau      State's only time source (end of frame), swappable for a fake clock
-  Receipts/
-    init.luau          exports the Receipts system and its types
-    Receipts.luau      the system: ProcessReceipt routing, waiting for players, game passes
-    Stores.luau        dataStore and memoryStore
-    FakeMarketplace.luau  stand-in MarketplaceService for tests
-    Types.luau         Receipt, ReceiptStore, Marketplace, options
-    Clock.luau  Log.luau  time sources and warnings, called through tables tests can patch
-test/
-  _run.luau            Lune entry point: mocks Roblox globals, patches require, runs suites
-  App.luau  Definition.luau  Graph.luau  Network.luau
-  Testing.luau         app:replace and Hydrogen.loopback, used the way a game's tests would
   Data.luau  PlayerState.luau
   State.luau           Hydrogen.State end to end through loopback
-  Receipts.luau        Hydrogen.Receipts with a fake marketplace and memory store
+  Receipts.luau        Hydrogen.Receipts with a fake marketplace, memory store and Data store
+  Fixtures/            modules the suites require
+docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
 tools/create-hydrogen/ the `pesde x atk422/create_hydrogen` project generator: its own pesde package

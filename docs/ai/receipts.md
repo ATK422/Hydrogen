@@ -92,6 +92,7 @@ Configuration and stores:
 - `Receipts.configure(options: ReceiptsOptions)`: replaces all options. Call before Receipts starts (main script, or any system's `init`); errors afterwards.
 - `Receipts.dataStore(source: (string | DataStoreLike)?): ReceiptStore`: the default store. A name (default `"HydrogenReceipts"`) or a DataStore-like object (`GetAsync`, `SetAsync`) for tests. Creating it makes no requests.
 - `Receipts.memoryStore(): MemoryStore`: in-memory store for tests.
+- `Receipts.fromData(playerData: PlayerStore<any>): ReceiptStore`: records each purchase in a `Hydrogen.Data.player` store, in the same save as the grant (via `updateOnce`). Handlers receive the draft data as their third argument. The recommended store when the game uses `Hydrogen.Data`.
 - `Receipts.fakeMarketplace(): FakeMarketplace`: stand-in `MarketplaceService` for tests.
 
 Types (import from `Hydrogen`):
@@ -159,8 +160,20 @@ Receipts.products({
 })
 ```
 
-### Exactly-once with Hydrogen.Data (wired at merge time)
-The Data kit module (`Hydrogen.Data`, being merged) records the purchase id in the player's profile in the same commit as the change, via `PlayerData:updateOnce`. Until a built-in helper ships, this adapter is the integration; it is the shape exercised by Receipts' tests.
+### Exactly-once with Hydrogen.Data
+`Hydrogen.Receipts.fromData(PlayerData)` records the purchase id in the player's data in the same commit as the change, via `PlayerData:updateOnce`, so a purchase is never granted twice or lost. Prefer it over the standalone store whenever the game uses `Hydrogen.Data`.
+
+```luau
+-- Main.server.luau, before app:start():
+Hydrogen.Receipts.configure({ store = Hydrogen.Receipts.fromData(PlayerData) })
+
+-- Handlers then change the data argument, not the store:
+Hydrogen.Receipts.product(COINS_100, function(_player: Player, _receipt: Hydrogen.Receipt, data: any)
+	data.coins += 100
+end)
+```
+
+For another data library, write the same adapter yourself. This is what `fromData` does:
 
 ```luau
 -- In your data system's module, after creating PlayerData with Hydrogen.Data.player(...)
@@ -188,14 +201,6 @@ local function receiptStore(PlayerData: any): Hydrogen.ReceiptStore
 		end,
 	}
 end
-
--- Main.server.luau, before app:start():
-Hydrogen.Receipts.configure({ store = receiptStore(PlayerData) })
-
--- Handlers then change the data argument:
-Receipts.product(COINS_100, function(_player: Player, _receipt: Hydrogen.Receipt, data: any)
-	data.coins += 100
-end)
 ```
 
 ### Standalone store (no data integration)
@@ -315,7 +320,7 @@ Warnings while running (the answer is `NotProcessedYet` unless stated):
 
 ## Works with
 
-- **Hydrogen.Data** (merging): a data-backed `ReceiptStore` using `PlayerData:waitForLoad`, `PlayerData:updateOnce` and `PlayerData:save` gives exactly-once grants (adapter in Recipes, wired at merge). Add Receipts after the Data system.
-- **Hydrogen.PlayerState** (merging): change replicated player state inside the handler; field assignments inside an `updateOnce` fn join the same commit.
-- **Test harness** (merging): Receipts' retries go through `src/Receipts/Clock.luau`, which the fake clock replaces; use `fakeMarketplace` and `memoryStore` with the harness's loopback setup.
+- **Hydrogen.Data**: `Hydrogen.Receipts.fromData(PlayerData)` gives exactly-once grants, built on `PlayerData:waitForLoad`, `PlayerData:updateOnce` and `PlayerData:save`. Add the Data store to the app too.
+- **Hydrogen.PlayerState**: change replicated player state inside the handler; field assignments inside an `updateOnce` fn join the same commit.
+- **Test harness**: Receipts' retries and load timeouts run on `Hydrogen.Clock`, so `t:advance` drives them; use `fakeMarketplace` and `memoryStore` with `Hydrogen.test`.
 - **Core:** a normal Hydrogen system; `app:replace(Hydrogen.Receipts, fake)` works like any other.

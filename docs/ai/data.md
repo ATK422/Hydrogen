@@ -388,7 +388,7 @@ Warnings:
 ## Works with
 
 - `Hydrogen.PlayerState`: `PlayerState.new(name, { data = PlayerData, ... })` turns the store's fields into saved fields of a per-player state that replicates per field. Writes through the state go to the store, and changes made through the store (`update`, `updateOnce`, `transaction`) show up in the state.
-- `Hydrogen.Receipts` (planned at merge): routes `ProcessReceipt` and records purchases through a store adapter built on `waitForLoad` (load), `updateOnce` (grant and record in one save) and `save` (retry durability). Product handlers should mutate the `data` argument; helpers that call `PlayerData:update` inside a grant also work.
-- `Hydrogen.State` (planned at merge): Data itself doesn't replicate. PlayerState's replication moves onto State.
-- Test harness and fake clock (planned at merge): all Data timing goes through `Hydrogen.Data.Clock` (`now`, `wait`). Retry and backoff waits, lock waits and autosave ticks use it.
+- `Hydrogen.Receipts`: `Hydrogen.Receipts.configure({ store = Hydrogen.Receipts.fromData(PlayerData) })` records each purchase id with its grant through `updateOnce`, so a purchase is granted exactly once. Product handlers get the draft data after the receipt (`function(player, receipt, data)`) and should change it; helpers that call `PlayerData:update` inside a grant also work.
+- `Hydrogen.State`: Data itself doesn't replicate. PlayerState replicates its fields through State.
+- Test harness and fake clock: all Data timing goes through `Hydrogen.Clock` (`Hydrogen.Data.Clock` forwards to it). Under `Hydrogen.test`, retry and backoff waits, lock waits and autosave ticks only move on `t:advance(seconds)`.
 - Core: stores are ordinary systems, so `use`, `app:replace` and the player and stop hooks apply as usual.

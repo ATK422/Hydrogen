@@ -315,7 +315,7 @@ net:close()
 - With `app:replace(Original, fake)`, the fake's hooks can call `Scope.of(self)` / `Scope.of(self, player)` and get the same scopes as `Scope.of(Original)`.
 - Test standalone logic with `Scope.new()`: add tasks, call `destroy()`, and assert that your cleanup ran.
 - To check that something was cleaned, add a function that sets a flag (`scope:add(function() cleaned = true end)`) or assert `scope.alive`.
-- Fakes shipped: none needed. `scope:delay` uses `task.delay` through an internal clock indirection (`Scope._clock.delay`). After the kit merge it runs on `Hydrogen.Clock`, so the test harness's fake clock (`advance`) fires scope delays too. Until then, wait real time (`task.wait`).
+- Fakes shipped: none needed. `scope:delay` runs on `Hydrogen.Clock`, so under `Hydrogen.test` it fires on `t:advance(seconds)`.
 
 ## Errors and warnings
 
@@ -336,7 +336,7 @@ An error inside a `scope:spawn`/`scope:delay` callback is not a `[HYDROGEN]` mes
 
 - **Systems (`Hydrogen.define`, `App`)**: Scope's lifetimes are the app's. Player scopes follow `playerAdded`/`playerRemoving` and system scopes follow `start`/`stop`, both in dependency order. `app:replace` fakes share the original's scopes.
 - **Network**: every `:On` returns a disconnect function, so `scope:add(Remote:On(fn))` ties a listener to a lifetime. Prefer system-scope listeners and check the `player` argument.
-- **Data / PlayerState** (kit, planned for the merge): load inside `playerAdded` (for example `PlayerData:waitForLoad(player)`, which yields and returns `false` if the player left or the load failed), then check `Scope.of(self, player).alive` before building. Keep saving in `playerRemoving`, not in scope cleanup.
-- **State** (kit, planned for the merge): `observe` returns a disconnect function, so `Scope.of(self, player):add(Coins:observe(player, fn))` stops observing when the player leaves. On the client, put UI observers in `Scope.of(self)` or a `child()` per screen.
-- **Testing harness / `Hydrogen.Clock`** (kit, planned for the merge): `scope:delay` moves onto `Hydrogen.Clock`, so a fake clock's `advance` drives it. Stopping the app in the harness destroys all scopes.
+- **Data / PlayerState**: load inside `playerAdded` (for example `PlayerData:waitForLoad(player)`, which yields and returns `false` if the player left or the load failed), then check `Scope.of(self, player).alive` before building. Keep saving in `playerRemoving`, not in scope cleanup.
+- **State**: `observe` returns a disconnect function, so `Scope.of(self, player):add(Coins:observe(player, fn))` stops observing when the player leaves. On the client, put UI observers in `Scope.of(self)` or a `child()` per screen.
+- **Testing harness / `Hydrogen.Clock`**: `scope:delay` runs on `Hydrogen.Clock`, so a fake clock's `advance` drives it. Stopping the app in the harness destroys all scopes.
 - **Receipts** (kit): no direct interaction. Receipts doesn't need per-player cleanup from you.

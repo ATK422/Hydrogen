@@ -10,7 +10,7 @@ Use it when:
 - Clients need some of those values: the owner sees their own coins, and everyone sees each player's level or team.
 
 Don't use it when:
-- The value isn't per player (round state, a global leaderboard): use `Hydrogen.State` (planned at merge) or a network event.
+- The value isn't per player (round state, a global leaderboard): use `Hydrogen.State` or a network event.
 - You only need saved data on the server and nothing replicates: `Hydrogen.Data.player` alone is enough.
 - The value changes every frame (aim direction, positions): replication is coalesced per frame but still sends each change; use an unreliable network event.
 - Clients must write the value: PlayerState is server-authoritative. Send a client event and let the server write.
@@ -174,10 +174,10 @@ Field kinds:
 - Inside a `PlayerData:update`/`updateOnce`/`transaction` callback, assigning a saved field of the same player joins that pending change; the state shows the new value after the callback commits.
 - If the player's data failed to load, the state still exists with template values (the player is being kicked). Writes to saved fields aren't persisted. Check `PlayerData:isLoaded(player)` if it matters.
 - Reads are a plain table lookup through `__index` (cheap). Writes go through `__newindex`.
-- Replication is coalesced: all changes in a frame go out once at the end of the frame (`task.defer`), only changed fields, only to allowed clients. A joining player receives their own owner and everyone fields plus every other player's everyone fields; leaving players are removed from every client.
-- On the client, the state is read-only and `get` errors until the first update for that player has arrived. Use `find` or `changed`.
+- Replication runs on `Hydrogen.State`: each replicated field is a `State.playerValue("<name>/<field>", ...)` visible to `"owner"` or `"everyone"`. Changes in a frame go out once at the end of the frame, only changed fields, only to allowed clients. A joining player receives their own owner and everyone fields plus every other player's everyone fields; leaving players are removed from every client. Under `Hydrogen.test`, the end of the frame is the next `t:advance`.
+- On the client, the state is read-only. `get(player)` returns a live view for any player in the game: fields read their defaults until the server's values arrive, and fields the client can't see read `nil`. `get` errors (and `find` returns `nil`) only for a player who isn't in the game. Use `changed` to react when values arrive.
 - Under `Hydrogen.loopback()` (one VM is server and clients), `get`/`find`/`changed` act as the server. Use `replica(viewer, player)` to assert what a client received.
-- Replication moves onto `Hydrogen.State` at merge time. The declaration (`data`, `runtime`, `replicate`) and this API stay the same. Network event names change to one per replicated field.
+- Each replicated field registers a State network object named `State/<name>/<field>`, so declare PlayerState in a shared module that both sides `require` before `app:start()`.
 
 ## Recipes
 
@@ -305,7 +305,7 @@ net:close()
 - `PlayerState <name>: replicate names "<field>", which is neither a saved nor a runtime field`: typo, or add it to `runtime`/the template.
 - `PlayerState <name> has no field "<field>"`: assignment to, or `changed` on, an undeclared field.
 - `PlayerState <name> has no state for <player> (not added yet, or already removed)`: called before the player reached this system's `playerAdded` or after its `playerRemoving`. Use `find`, or `use` the state so ordering guarantees it.
-- `PlayerState <name>: nothing replicated for <player> yet; use find, or listen with changed` (client).
+- `PlayerState <name>: <player> isn't in the game (or nothing is replicated); use find` (client).
 - `PlayerState is read-only on the client; change it on the server`.
 - `<store> field "<field>" for <player> rejected: <cause>`: the value fails the Data schema; the old value stays.
 - `PlayerState changed listener failed: <err>` (warning): your `changed` callback errored; others still ran.
@@ -314,6 +314,6 @@ net:close()
 ## Works with
 
 - `Hydrogen.Data`: `data = <Data.player store>` provides saved fields. Writes go through the store, and any store change shows up in the state and replicates.
-- `Hydrogen.Receipts` (planned at merge): grants made through the Data store's `updateOnce` update and replicate the state automatically.
-- `Hydrogen.State` (planned at merge): becomes the replication layer under PlayerState (one `State.playerValue` per replicated field, with `visibleTo` from `replicate`). The declaration format and the methods above don't change.
-- `Hydrogen.Scope` / test harness (planned at merge): no special integration. The state is an ordinary system, so `app:replace` and the harness apply.
+- `Hydrogen.Receipts`: with `Hydrogen.Receipts.fromData(PlayerData)`, grants are made through the store's `updateOnce`, so they update and replicate the state automatically.
+- `Hydrogen.State`: the replication layer under PlayerState (one `State.playerValue` per replicated field, with `visibleTo` from `replicate`).
+- `Hydrogen.Scope` / test harness: no special integration. The state is an ordinary system, so `app:replace` and the harness apply, and the harness resets State between tests.

@@ -24,6 +24,10 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - Game passes in `Hydrogen.Receipts`: `owns` (cached per session, updated by in-game purchases), `gamePass` / `gamePasses` handlers that run once per session for owners, `promptProduct` and `promptGamePass`.
 - Receipt stores: the `ReceiptStore` interface for recording purchases in the same save as the grant, `Receipts.dataStore()` (the default, one DataStore key per purchase) and `Receipts.memoryStore()` for tests.
 - `Receipts.fakeMarketplace()`: a stand-in `MarketplaceService` for tests, with `purchase`, `deliver`, `retryPending`, `buyGamePass` and failure controls.
+- `Receipts.fromData(PlayerData)`: a receipt store on a `Hydrogen.Data` player store. Each purchase id is recorded with its grant through `updateOnce`, so a purchase is granted exactly once; handlers get the draft data after the receipt.
+- The kit modules work together: PlayerState replicates each field through a `Hydrogen.State` per-player value (`State/<name>/<field>`), and its client view reads State live. Data, Scope, State and Receipts read time through `Hydrogen.Clock` and warn through Hydrogen's log, so `Hydrogen.test`'s fake clock and warning capture reach them. `Hydrogen.test` resets State when it closes.
+- Agent docs: `llms.txt` and `docs/ai/*.md`, one file per API area in a fixed layout, plus `AGENTS.md` for agents working on Hydrogen. They ship in the package.
+- `tools/create-hydrogen`: `pesde x atk422/create_hydrogen` scaffolds a new game with git, Rojo, Rokit, pesde, Hydrogen, an example system and test, and agent docs.
 
 ### Changed
 

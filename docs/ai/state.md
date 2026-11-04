@@ -283,7 +283,7 @@ Hydrogen.State.reset() -- values are module singletons: reset between tests
 - Count messages per state with middleware: `GameState.Round.event:Use(function(context, ...) if context.direction == "outgoing" then sent += 1 end return ... end)`. Each flush of a changed state is one outgoing message.
 - Without a loopback in a headless test, State is a plain store with no replication, which is useful for unit-testing server logic.
 - `app:replace` works as usual for systems that write state. State itself is not a system and is never replaced.
-- Planned at merge: the `Hydrogen.test` harness calls `State.reset()` on close, and State's end-of-frame send runs on the harness's fake clock (`Clock.heartbeat`).
+- `Hydrogen.test` calls `State.reset()` when it closes, and State's end-of-frame send runs on the harness's fake clock: it goes out on the next `t:advance` (`t:advance(0)` is one frame). Without a fake clock, headless, it runs deferred.
 
 ## Errors and warnings
 
@@ -315,7 +315,7 @@ Warnings:
 
 - **Network:** each state is a normal `serverEvent`, so `Hydrogen.logger()`, `Hydrogen.useMiddleware`, `App.new({ batching = true })` (state messages batch with other events) and `encode = true` all apply. It uses the same queue and handshake rules, so state sent before a client is ready is delivered on its handshake.
 - **Systems:** write state from any hook. `playerAdded` writes reach the joining client in its handshake. `playerRemoving` can still read the leaving player's state.
-- **PlayerState (`Hydrogen.PlayerState`, kit-data; wired up at merge):** each replicated field becomes `State.playerValue("<Session>/<field>", ...)` with `visibleTo` from the field's `"owner"` or `"everyone"`. PlayerState's client `changed` signal is `observeAll`. Server-only fields create no State.
+- **PlayerState (`Hydrogen.PlayerState`):** each replicated field is `State.playerValue("<name>/<field>", ...)` with `visibleTo` from the field's `"owner"` or `"everyone"`. PlayerState's client `changed` signal is `observeAll`. Server-only fields create no State.
 - **Data (`Hydrogen.Data`):** persistence. Load in `playerAdded`, then `set` the fields clients need. State is not saved.
-- **Scope (`Hydrogen.Scope`, kit-scope; at merge):** `observe`, `observeKey`, `onChange` and `observeAll` return disconnect functions, so pass them to a scope: `Hydrogen.Scope.of(self):add(GameState.Round:observe(fn))`, or `Hydrogen.Scope.of(self, player):add(...)` for per-player observers.
-- **Testing (`Hydrogen.loopback`, and the `Hydrogen.test` harness at merge):** see Testing. The harness's fake clock drives State's end-of-frame send.
+- **Scope (`Hydrogen.Scope`):** `observe`, `observeKey`, `onChange` and `observeAll` return disconnect functions, so pass them to a scope: `Hydrogen.Scope.of(self):add(GameState.Round:observe(fn))`, or `Hydrogen.Scope.of(self, player):add(...)` for per-player observers.
+- **Testing (`Hydrogen.loopback` and `Hydrogen.test`):** see Testing. The harness's fake clock drives State's end-of-frame send.

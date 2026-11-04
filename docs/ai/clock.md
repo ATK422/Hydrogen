@@ -268,4 +268,4 @@ assert(ok, err)
 
 - **Hydrogen.test** (testing.md): installs and restores the fake clock; `t:advance` is `t.clock:advance`.
 - **Network:** `serverFunction:SetTimeout` timeouts, `Hydrogen.rateLimit` refills and `App.new({ batching = true })` flushes all run on `Clock`.
-- **Kit modules (Data autosave and retries, Scope's `scope:delay`, State's per-frame replication, Receipts' retries):** read time through `Clock` once the kit is merged, so `t:advance` drives them. Per-frame work (State's coalesced replication) goes out on the next `t:advance` (`t:advance(0)` is one frame).
+- **Kit modules (Data autosave and retries, Scope's `scope:delay`, State's per-frame replication, Receipts' retries):** read time through `Clock`, so `t:advance` drives them. Per-frame work (State's coalesced replication) goes out on the next `t:advance` (`t:advance(0)` is one frame).

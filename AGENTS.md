@@ -16,6 +16,8 @@ The vision: Hydrogen should feel like Kotlin's standard library. Everything a Ro
 
 Read [`llms.txt`](llms.txt) and the files it links in `docs/ai/`. Start with `systems.md` and `app.md`.
 
+To start a new game, run `pesde x atk422/create_hydrogen`. For flags and non-interactive use, see `tools/create-hydrogen/docs/ai/create.md`.
+
 ## If you are working on Hydrogen itself
 
 - The contributor guide is README "Part 2: Working on Hydrogen itself": toolchain, layout, conventions and releasing.
