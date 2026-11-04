@@ -181,4 +181,46 @@ function Stores.dataStore(source: (string | DataStoreLike)?): ReceiptStore
 	return store :: any
 end
 
+-- The parts of a Hydrogen.Data player store fromData uses.
+export type PlayerDataLike = {
+	waitForLoad: (self: any, player: Player, timeout: number?) -> boolean,
+	updateOnce: (self: any, player: Player, id: string, fn: (data: any) -> ...any) -> string,
+	save: (self: any, player: Player) -> (boolean, string?),
+}
+
+-- Records purchases in a Hydrogen.Data player store: the purchase id goes into the same save as
+-- the grant (updateOnce), so a purchase is granted exactly once. Handlers get the store's draft
+-- data after the receipt; change it, not the store, to keep the grant in that save.
+function Stores.fromData(playerData: PlayerDataLike): ReceiptStore
+	local store = {}
+
+	function store.load(_self: any, player: Player): boolean
+		return playerData:waitForLoad(player)
+	end
+
+	-- updateOnce does the dedupe, against the ids kept with the player's data.
+	function store.isGranted(_self: any, _player: Player, _receipt: Receipt): boolean
+		return false
+	end
+
+	function store.record(_self: any, player: Player, receipt: Receipt, grant: (...any) -> ())
+		local result = playerData:updateOnce(player, receipt.PurchaseId, function(data)
+			grant(data)
+		end)
+		if result ~= "applied" and result ~= "duplicate" then
+			error(`[HYDROGEN] Receipts: couldn't record purchase {receipt.PurchaseId} in player data ({result})`, 0)
+		end
+	end
+
+	-- Receipts retries through this when updateOnce committed but its save failed.
+	function store.save(_self: any, player: Player, _receipt: Receipt)
+		local ok, err = playerData:save(player)
+		if not ok then
+			error(`[HYDROGEN] Receipts: couldn't save player data: {err}`, 0)
+		end
+	end
+
+	return store :: any
+end
+
 return Stores

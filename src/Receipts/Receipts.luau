@@ -579,6 +579,8 @@ end
 Receipts.dataStore = Stores.dataStore
 -- Records in memory, with failSaves to simulate outages. For tests.
 Receipts.memoryStore = Stores.memoryStore
+-- Records each purchase in a Hydrogen.Data player store, in the same save as the grant.
+Receipts.fromData = Stores.fromData
 -- A stand-in MarketplaceService for tests; see FakeMarketplace.
 Receipts.fakeMarketplace = FakeMarketplace.new
 

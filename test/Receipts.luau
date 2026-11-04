@@ -867,6 +867,30 @@ return function()
 			return nil
 		end)
 
+		test.case("Receipts.fromData grants each purchase once through Hydrogen.Data", function()
+			local backend = Hydrogen.Data.memory()
+			local PlayerData = Hydrogen.Data.player("ReceiptsFromData", { template = { coins = 0 }, backend = backend })
+			local market = Receipts.fakeMarketplace()
+			local coins = productId()
+			register(Receipts.product(coins, function(_player, _receipt, data)
+				data.coins += 100
+			end))
+
+			local app = newApp(market, Receipts.fromData(PlayerData), { PlayerData })
+			local alice = fakePlayer("Alice")
+			app:_addPlayer(alice)
+
+			local decision, receipt = market:purchase(alice, coins)
+			check.equal(decision, "PurchaseGranted")
+			check.equal(PlayerData:get(alice).coins, 100)
+
+			-- Roblox delivers the same receipt again: recorded with the data, so no second grant.
+			check.equal(market:deliver(receipt), "PurchaseGranted")
+			check.equal(PlayerData:get(alice).coins, 100)
+			check.equal(backend:peek("ReceiptsFromData", tostring(alice.UserId)).data.coins, 100)
+			return nil
+		end)
+
 		test.case("prompts go to the marketplace", function()
 			local market = Receipts.fakeMarketplace()
 			newApp(market, Receipts.memoryStore())
