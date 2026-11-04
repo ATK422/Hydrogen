@@ -10,6 +10,8 @@ local State = require("@self/State")
 local Receipts = require("@self/Receipts")
 local Log = require("@self/Log")
 local Character = require("@self/Character")
+local Signal = require("@self/Signal")
+local Scheduler = require("@self/Scheduler")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -76,6 +78,11 @@ export type LogLine = Log.Line
 export type LogSink = Log.Sink
 export type LogBuffer = Log.Buffer
 export type LogRateLimitOptions = Log.RateLimitOptions
+export type Signal<T...> = Signal.Signal<T...>
+export type Connection = Signal.Connection
+export type Timer = Scheduler.Timer
+export type EveryOptions = Scheduler.EveryOptions
+export type FixedOptions = Scheduler.FixedOptions
 
 return {
 	App = App,
@@ -125,4 +132,8 @@ return {
 	Log = Log.api,
 	-- characterAdded / characterRemoving are system hooks; this holds the test helpers for fake characters.
 	Character = Character,
+	-- Typed in-process signals: Signal.new(), Connect, Once, Wait, Fire.
+	Signal = Signal,
+	-- Timers tied to lifetimes: after, every, fixed (game loop), debounce, throttle.
+	Scheduler = Scheduler,
 }
