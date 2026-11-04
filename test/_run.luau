@@ -28,6 +28,7 @@ require("./Component")()
 require("./Input")()
 require("./Guards")()
 require("./Commands")()
+require("./Config")()
 
 local frktest = require("@pkg/frktest")
 local console_reporter = frktest.reporters.console_reporter

@@ -16,6 +16,7 @@ local Component = require("@self/Component")
 local Input = require("@self/Input")
 local Guards = require("@self/Guards")
 local Commands = require("@self/Commands")
+local Config = require("@self/Config")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -125,6 +126,14 @@ export type CommandSuggestion = Commands.Suggestion
 export type CommandsOptions = Commands.CommandsOptions
 export type CommandsClientOptions = Commands.ClientOptions
 export type PermissionResolver = Commands.PermissionResolver
+export type Config<V, F> = Config.Config<V, F>
+export type ConfigSpec<V, F> = Config.Spec<V, F>
+export type Flag = Config.Flag
+export type FlagRule = Config.FlagRule
+export type ConfigSegment = Config.Segment
+export type ConfigEnvironment = Config.Environment
+export type ConfigSource = Config.Source
+export type MemoryConfigSource = Config.MemorySource
 
 return {
 	App = App,
@@ -187,4 +196,6 @@ return {
 	-- Kit: in-game commands with typed arguments, run on the server. Add it to the server app,
 	-- and Commands.Client to the client app.
 	Commands = Commands,
+	-- Typed config and feature flags: Config.define(name, { values, flags, environments, source }).
+	Config = Config,
 }

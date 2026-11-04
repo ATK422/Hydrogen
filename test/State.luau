@@ -736,6 +736,19 @@ return function()
 			return nil
 		end)
 
+		test.case("a test that ends before its frame flushed doesn't stop later tests replicating", function()
+			-- The write schedules a flush on the harness's fake clock, which is restored before it runs.
+			Hydrogen.test({ players = 1 }, function()
+				defs.Round:set("Playing")
+			end)
+			Hydrogen.test({ players = { "Alice" } }, function(t, alice)
+				defs.Round:set("Results")
+				t:advance(0)
+				check.equal(t:as(alice, defs.Round.get, defs.Round), "Results")
+			end)
+			return nil
+		end)
+
 		return nil
 	end)
 	return nil

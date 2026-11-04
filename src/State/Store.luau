@@ -653,6 +653,9 @@ function Store.reset()
 		entry.cell.dirty = false
 	end
 	pending = {}
+	-- The frame that would have flushed may never come (a test's fake clock was restored), so
+	-- the next write must schedule its own.
+	scheduled = false
 	for _, state in Store.states do
 		table.clear(state.global)
 		table.clear(state.players)

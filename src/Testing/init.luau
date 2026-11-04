@@ -12,6 +12,7 @@ local Runtime = require("./Network/Runtime")
 local State = require("./State")
 local Character = require("./Character")
 local Input = require("./Input")
+local Config = require("./Config")
 local Expect = require("@self/Expect")
 
 export type Expectation = Expect.Expectation
@@ -447,6 +448,8 @@ function Testing.harness(options: TestOptions?): Harness
 		step(Character._reset)
 		-- So are input actions: bindings, contexts, held keys and listeners start fresh.
 		step(Input.reset)
+		-- Overrides, live values and flag results too.
+		step(Config.reset)
 		if Runtime.Observer == record then
 			Runtime.Observer = nil
 		end
