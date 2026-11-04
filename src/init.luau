@@ -15,6 +15,7 @@ local Scheduler = require("@self/Scheduler")
 local Component = require("@self/Component")
 local Input = require("@self/Input")
 local Guards = require("@self/Guards")
+local Commands = require("@self/Commands")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -107,6 +108,23 @@ export type RoleSource = Guards.RoleSource
 export type GuardPredicate = Guards.Predicate
 export type RangeOptions = Guards.RangeOptions
 export type GuardsConfigureOptions = Guards.ConfigureOptions
+export type CommandSpec = Commands.CommandSpec
+export type CommandContext = Commands.CommandContext
+export type CommandArg = Commands.Arg
+export type CommandArgOptions = Commands.ArgOptions
+export type CommandParseContext = Commands.ParseContext
+export type CommandPermission = Commands.Permission
+export type CommandResult = Commands.CommandResult
+export type CommandStatus = Commands.Status
+export type CommandOutputKind = Commands.OutputKind
+export type CommandOutputLine = Commands.OutputLine
+export type CommandInfo = Commands.CommandInfo
+export type CommandArgInfo = Commands.ArgInfo
+export type CommandCompletion = Commands.Completion
+export type CommandSuggestion = Commands.Suggestion
+export type CommandsOptions = Commands.CommandsOptions
+export type CommandsClientOptions = Commands.ClientOptions
+export type PermissionResolver = Commands.PermissionResolver
 
 return {
 	App = App,
@@ -166,4 +184,7 @@ return {
 	Input = Input,
 	-- Server-side rules for incoming traffic: cooldowns, roles and permissions, range checks, predicates.
 	Guards = Guards,
+	-- Kit: in-game commands with typed arguments, run on the server. Add it to the server app,
+	-- and Commands.Client to the client app.
+	Commands = Commands,
 }

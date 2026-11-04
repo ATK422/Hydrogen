@@ -27,6 +27,7 @@ require("./Scheduler")()
 require("./Component")()
 require("./Input")()
 require("./Guards")()
+require("./Commands")()
 
 local frktest = require("@pkg/frktest")
 local console_reporter = frktest.reporters.console_reporter
