@@ -1,0 +1,11 @@
+# Text files use LF everywhere, so formatters and diffs agree on Windows, macOS and Linux.
+* text=auto eol=lf
+
+# Roblox binary formats
+*.rbxl binary
+*.rbxm binary
+*.png binary
+*.jpg binary
+*.ogg binary
+*.mp3 binary
+*.fbx binary

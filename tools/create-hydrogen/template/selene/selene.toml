@@ -1,0 +1,3 @@
+# Selene (https://kampfkarren.github.io/selene) with Roblox's globals. Selene downloads the
+# Roblox standard library the first time it runs.
+std = "roblox"

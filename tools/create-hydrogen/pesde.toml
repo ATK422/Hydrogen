@@ -1,0 +1,27 @@
+name = "atk422/create_hydrogen"
+version = "0.1.0"
+description = "Create a new Roblox game with Hydrogen: pesde x atk422/create_hydrogen"
+authors = ["atk422"]
+license = "MIT"
+repository = "https://github.com/ATK422/Hydrogen"
+includes = [
+	"pesde.toml",
+	"README.md",
+	"LICENSE",
+	"src/**/*.luau",
+	"template/**",
+	"docs/**",
+]
+
+[target]
+environment = "lune"
+bin = "src/main.luau"
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[scripts]
+test = "test/run.luau"
+
+[engines]
+lune = "^0.10.4"

@@ -1,0 +1,19 @@
+--!strict
+
+-- Boots the server: collects every system under Systems and starts them in dependency order.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+
+local app = Hydrogen.App.new()
+{{#if examples}}
+app:addNetwork(ReplicatedStorage.Shared.Network)
+{{/if}}
+{{#unless examples}}
+-- Once you define network objects in src/shared/Network, register them here and in
+-- Main.client.luau (both sides must register the same names):
+-- app:addNetwork(ReplicatedStorage.Shared.Network)
+{{/unless}}
+app:addSystemsFolders(script.Parent.Systems)
+app:start()

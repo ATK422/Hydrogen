@@ -13,7 +13,15 @@ Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current v
 
 ## Part 1: Using Hydrogen in a game
 
-### Install
+### Start a new game
+
+```bash
+pesde x atk422/create_hydrogen
+```
+
+It asks for a name and a few options, then sets up Rojo, Rokit, pesde, a booted `Hydrogen.App` on both sides, example systems, a test using `Hydrogen.loopback()`, editor settings and optionally StyLua, Selene, luau-lsp and GitHub Actions. It installs the tools and packages and makes the first commit. Pass `-- --help` for the flags, or `-- my-game --yes` to take every default. See [tools/create-hydrogen](tools/create-hydrogen/README.md). Coding agents scaffolding a game should read [tools/create-hydrogen/docs/ai/create.md](tools/create-hydrogen/docs/ai/create.md).
+
+### Install into an existing project
 
 ```bash
 pesde add atk422/hydrogen
@@ -1284,7 +1292,10 @@ test/
   Receipts.luau        Hydrogen.Receipts with a fake marketplace and memory store
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
+tools/create-hydrogen/ the `pesde x atk422/create_hydrogen` project generator: its own pesde package
 ```
+
+When the public API changes, update the generator's template in `tools/create-hydrogen/template/` in the same change and run its tests (`lune run test/run e2e` from that folder). Its [README](tools/create-hydrogen/README.md) covers maintaining and publishing it.
 
 ### How the tests run
 

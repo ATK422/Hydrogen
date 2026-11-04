@@ -1,0 +1,20 @@
+--!strict
+
+-- Boots the client. Anything outside this script's own folder may still be replicating when
+-- it runs, so it waits for what it needs first.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Hydrogen = require(ReplicatedStorage:WaitForChild("roblox_packages"):WaitForChild("hydrogen"))
+
+local app = Hydrogen.App.new()
+{{#if examples}}
+app:addNetwork(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Network"))
+{{/if}}
+{{#unless examples}}
+-- Once you define network objects in src/shared/Network, register them here and in
+-- Main.server.luau (both sides must register the same names):
+-- app:addNetwork(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Network"))
+{{/unless}}
+app:addSystemsFolders(script.Parent:WaitForChild("Systems"))
+app:start() -- yields until the server's network is ready
