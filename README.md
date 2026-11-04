@@ -77,6 +77,8 @@ Hydrogen.Receipts       -- kit: routes ProcessReceipt and grants each purchase o
 
 Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`.
 
+Two commands live outside the game: `pesde x atk422/create_hydrogen` starts a new game, and `pesde x atk422/hydrogen_lint` checks its network before you playtest ([Checking the network before you playtest](#checking-the-network-before-you-playtest)).
+
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
 ### Systems
@@ -535,6 +537,56 @@ What `app:start()` does, in order:
 - `serverFunction:Fire` invokes a single client and yields until it answers or the timeout (10 seconds by default) runs out.
 - Middleware added after a message is queued does not run on it; add middleware before firing anything.
 - With batching on, events go out on `Heartbeat`, at the end of the frame they were fired in. A function call first sends the events already waiting for its target.
+
+### Checking the network before you playtest
+
+The rules above break at runtime, often far from the cause. `hydrogen_lint` finds those bugs before you press Play. From the game's folder:
+
+```bash
+pesde x atk422/hydrogen_lint
+```
+
+```
+error[one-sided] on the server: ServerEvent "Kick" is registered on the server only
+  --> src/server/Admin.luau:7 (ServerScriptService.Server.Admin)
+  fix: Ids come from the sorted names, so every name after it reaches the wrong object. It's defined in ServerScriptService.Server.Admin, which clients can't see. Move it to a shared module (such as ReplicatedStorage.Shared.Network) and pass that folder to app:addNetwork on both sides.
+
+server: 1 script, 3 names, network started
+client: 1 script, 2 names, network started
+1 error, 0 warnings
+```
+
+It boots your game twice under Lune, once as the server and once as the client, and compares what Hydrogen's network registered on each side. It reports:
+
+- **one-sided names**: a name on one side only, including definitions in ServerScriptService or StarterPlayer modules, and different `addNetwork` folders on each side (it lists both sides' folders)
+- **duplicates**, after `Hydrogen.namespace` prefixes and the `State/<name>` events `Hydrogen.State` and PlayerState register
+- **late registrations**: objects first created in a `start` hook or after `app:start()`, with the line that required them
+- **mismatches**: a different `:Encode()`, schema or kind of object on each side
+- `serverFunction`s missing their curried returns, `clientFunction`s without `gt.args` / `gt.returns`, events nothing listens to, names that differ only by case, a State passed to `addNetwork` (which this version of Hydrogen loops on forever), script errors during the boot, and Hydrogen's own boot warnings
+
+Flags go after `--`: `--json` prints a JSON report for CI and agents, `--strict` fails on warnings too, `--ignore <rule>` drops a rule, and `--help` lists them all. The exit code is 0 with no errors, 1 with errors and 2 if the lint couldn't run. In CI:
+
+```yaml
+- name: Network lint
+  run: pesde x atk422/hydrogen_lint -- --strict
+```
+
+Rules worth knowing:
+
+- It needs a Rojo project (`default.project.json`) and runs `rojo sourcemap`; without Rojo, pass `--sourcemap <file>`.
+- It runs your Scripts and LocalScripts, the modules they require and your systems' `init` and `start` hooks. No players join and no frames run, so a module first required from `playerAdded` or a button press isn't checked. Keep definitions in modules both sides require before `app:start()`.
+- A function fired from a `start` hook waits forever, as if the other side never answered. The rest of that hook doesn't run.
+- Engine APIs it doesn't emulate return harmless stand-ins, and `WaitForChild` doesn't wait. Your game's `print` output stays out of the report (`--verbose` shows it).
+
+See [docs/ai/lint.md](docs/ai/lint.md) for every flag, rule and the JSON format.
+
+#### Why it's designed this way
+
+- **It runs the game rather than parsing it.** Network names in real games are built at runtime: `Hydrogen.namespace` prefixes, `State/<name>`, PlayerState fields, loops, side-specific branches and modules found through `addNetwork` folders and Instance paths. A static parser would have to resolve Rojo paths, follow requires and evaluate Luau to get them right. Booting each side and reading the registries Hydrogen's network runtime builds gets exactly the names, kinds, schemas and `:Encode()` flags the game would have, from the same code. The cost is that game code must load under Lune, so engine calls get permissive stand-ins, and the lint only sees what the boot reaches.
+- **Two worlds in one process.** Each side gets its own Instance tree from the sourcemap, globals, module cache and `RunService` answers, the way two Roblox VMs would. That's faster than two processes (about half a second for a small game, Rojo included) and doesn't depend on finding a `lune` executable to start twice.
+- **It doesn't change Hydrogen's network.** It wraps the runtime's methods on the loaded module tables to record who registered what, from which line, and whether the network had started. A duplicate is reported and skipped instead of erroring, so one bug doesn't hide the rest.
+- **The engine ships inside Hydrogen** (`src/Testing/Lint/`), and `atk422/hydrogen_lint` is a small launcher that finds the Hydrogen your project installed and runs its engine. The lint reads internal registries, so it always matches the runtime version the game uses, and `pesde x` needs no setup and always runs the newest launcher. Nothing in a game requires the engine, so it costs nothing there.
+- **Text for people, JSON for machines**, both with a fix per diagnostic, and exit codes CI can use. Game output never goes to stdout, so `--json` stays parseable.
 
 ### Saving data with `Hydrogen.Data`
 
@@ -1275,6 +1327,11 @@ src/
     init.luau          Hydrogen.test and Hydrogen.harness
     Expect.luau        expectations on deliveries, argument matching, failure messages
     Lune.luau          Lune runtime: Roblox globals and a Roblox-style require (shipped for game tests)
+    Lint/              the network lint engine (Lune only), run by tools/hydrogen-lint
+      World.luau       one side of a game: Instance tree from the sourcemap, globals, require, scripts
+      Probe.luau       wraps the network runtime in a world and records registrations with their stacks
+      Rules.luau       compares the two sides' registrations into diagnostics
+      Lint.luau  Report.luau  Cli.luau   Lint.run, text/JSON output, the command line
 test/
   _run.luau            Lune entry point: installs the Lune runtime, runs suites
   App.luau  Clock.luau  Definition.luau  Graph.luau  Network.luau
@@ -1283,14 +1340,18 @@ test/
   Data.luau  PlayerState.luau
   State.luau           Hydrogen.State end to end through loopback
   Receipts.luau        Hydrogen.Receipts with a fake marketplace, memory store and Data store
+  Lint.luau            the network lint against the fixture games in Fixtures/Lint
   Fixtures/            modules the suites require
 docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
 tools/create-hydrogen/ the `pesde x atk422/create_hydrogen` project generator: its own pesde package
+tools/hydrogen-lint/   the `pesde x atk422/hydrogen_lint` launcher: finds a game's Hydrogen and runs its src/Testing/Lint
 ```
 
 When the public API changes, update the generator's template in `tools/create-hydrogen/template/` in the same change and run its tests (`lune run test/run e2e` from that folder). Its [README](tools/create-hydrogen/README.md) covers maintaining and publishing it.
+
+The network lint reads the network runtime's internals: `Runtime.registerNetworkObject`, `RegisteredNames`, `Objects`, `Initialized`, `namesHash` and `countObjects`, and each object's `_kind`, `_schema` / `_argsSchema` / `_returnsSchema`, `_codec` / `_argsCodec`, `_listeners` and `_callback`, plus `ServerFunction.new`, `ClientFunction.new` and `App.addNetwork`. When you change those, update `src/Testing/Lint/Probe.luau` in the same change; `test/Lint.luau` boots the fixture games in `test/Fixtures/Lint/` and fails on drift. After changing a fixture's layout, regenerate its sourcemap from its folder with `rojo sourcemap default.project.json --output sourcemap.json`. The launcher in `tools/hydrogen-lint` has its own tests (`lune run test/run` from that folder) and [README](tools/hydrogen-lint/README.md).
 
 ### How the tests run
 

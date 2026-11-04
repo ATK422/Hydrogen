@@ -1,0 +1,25 @@
+name = "atk422/hydrogen_lint"
+version = "0.1.0"
+description = "Check a Hydrogen game's network before you playtest: pesde x atk422/hydrogen_lint"
+authors = ["atk422"]
+license = "MIT"
+repository = "https://github.com/ATK422/Hydrogen"
+includes = [
+	"pesde.toml",
+	"README.md",
+	"LICENSE",
+	"src/**/*.luau",
+]
+
+[target]
+environment = "lune"
+bin = "src/main.luau"
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[scripts]
+test = "test/run.luau"
+
+[engines]
+lune = "^0.10.2"
