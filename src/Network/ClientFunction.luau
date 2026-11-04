@@ -21,6 +21,7 @@ function ClientFunction.new<A..., R...>(name: string, args: (A...) -> (), return
     local fn = {} :: ClientFunction<A..., R...>
 
     fn._name = name
+    fn._kind = "ClientFunction"
     fn._requestMiddleware = {}
     fn._responseMiddleware = {}
     fn._callback = nil
@@ -29,12 +30,16 @@ function ClientFunction.new<A..., R...>(name: string, args: (A...) -> (), return
     fn._argsCodec = nil
     fn._returnsCodec = nil
 
+    local function handle(player: Player?, ...: any): ...any
+        return fn._returnsSchema:assert((fn._callback :: any)(player, ...))
+    end
+
     -- Runs on the server.
     local function respond(player: Player, ...: any): ...any
         return Codec.encodeWith(fn._returnsCodec, Middleware.unlessDropped(name, "response", Middleware.run(
             fn._responseMiddleware,
             "ClientFunction", name, "outgoing", "response", player, nil,
-            fn._returnsSchema:assert((fn._callback :: any)(player, fn._argsSchema:assert(...)))
+            Runtime:observeCall("ClientFunction", name, player, handle, fn._argsSchema:assert(...))
         )))
     end
 

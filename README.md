@@ -5,7 +5,7 @@ A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you 
 - **Systems**: modules with `init` / `start`, player (`playerAdded` / `playerRemoving`) and shutdown (`stop`) hooks that run in dependency order.
 - **App**: collects your systems (and network definitions) and boots them.
 - **Network**: typed, schema-checked remote events and functions. Nothing fired during startup is lost, because events are queued until the network and each client are ready. Middleware inspects or transforms traffic, and a logger and a rate limiter are built in. Events can be unreliable, and batching and buffer encoding are there when traffic gets heavy.
-- **Testing**: swap a system for a fake with `app:replace`, and run server and client systems together in one VM with `Hydrogen.loopback`.
+- **Testing**: `Hydrogen.test` runs your systems with fakes, fake players and a fake clock in one call, checks what was fired with expectations, and always cleans up. It runs in Studio and under Lune, with any test framework. Underneath, `app:replace` swaps a system for a fake and `Hydrogen.loopback` runs server and client systems together in one VM.
 
 Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current version: **0.4.0** (see [CHANGELOG.md](CHANGELOG.md)). License: MIT.
 
@@ -56,10 +56,13 @@ Hydrogen.logger         -- build a logging middleware for debugging
 Hydrogen.rateLimit      -- build a middleware that drops a player's messages beyond a rate
 Hydrogen.DROP           -- return this from a middleware to stop a message
 Hydrogen.loopback       -- headless tests: one VM plays the server and fake clients
+Hydrogen.test           -- one call per test: loopback, fake clock, app, fakes, players, expectations
+Hydrogen.harness        -- the same harness for frameworks with setup/teardown hooks
+Hydrogen.Clock          -- time for systems and tests: Clock.now(), wait, delay, heartbeat, fake()
 Hydrogen.gt             -- GreenTea, for writing schemas
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback` and `Hydrogen.AppOptions`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -450,7 +453,159 @@ What `app:start()` does, in order:
 
 ### Testing your systems
 
-Two tools let a test start real systems without a running game: `app:replace` swaps a dependency for a fake, and `Hydrogen.loopback()` stands in for the remotes so client and server systems can talk in one VM. Both work under [Lune](https://lune-org.github.io/docs) and in Studio. `test/Testing.luau` in this repository has runnable examples.
+`Hydrogen.test` runs a test of your systems in one call. It opens a loopback network (one VM plays the server and fake clients), installs a fake clock, builds and starts an app with your systems and fakes, and joins players. Then it runs your test function and tears everything down afterwards, even when the test errors. It works under [Lune](https://lune-org.github.io/docs) and in Studio, inside any test framework (frktest, TestEZ, Jest-Lua) or none: a failed expectation is an error. `test/Testing.luau` in this repository has runnable examples.
+
+```luau
+local Remotes = require(ReplicatedStorage.Network.Shop)
+local Shop = require(ServerScriptService.Systems.Shop) -- does `local Data = use(DataSystem)`
+local DataSystem = require(ServerScriptService.Systems.Data)
+
+Hydrogen.test({
+	systems = { Shop },
+	replace = { [DataSystem] = { getCoins = function() return 500 end } },
+	players = { "Alice", "Bob" },
+}, function(t, alice, bob)
+	t:as(alice, function()
+		Remotes.Buy:Fire("sword")
+	end)
+
+	t:expect(Remotes.Buy):firedBy(alice, "sword")
+	t:expect(Remotes.Bought):firedTo(alice, "sword", 500)
+	t:expect(Remotes.Bought):notFired(bob)
+end)
+```
+
+In TestEZ or Jest-Lua, call it inside `it(...)`; in frktest, inside `test.case(...)`. Without options it is `Hydrogen.test(function(t) ... end)`.
+
+Options, all optional:
+
+| Option | What it does |
+| --- | --- |
+| `systems` | Systems to add to the app. |
+| `replace` | Fakes as `{ [Original] = fake }`, applied with [`app:replace`](#faking-a-dependency-with-appreplace). |
+| `players` | Fake clients joined before the app starts: names (`{ "Alice", "Bob" }`) or a count. The test function gets them after `t`. |
+| `start` | The app is started before your function runs. Pass `false` to set up with `t:add`, `t:replace` and `t:join` first, then call `t:start()`. |
+| `app` | Options for `App.new`, e.g. `{ debug = true }`. |
+| `clock` | `false` keeps real time. A table such as `{ now = 0, time = 1700000000 }` sets where the fake clock starts. |
+
+The harness `t` has:
+
+- `t:add(...)`, `t:replace(original, fake)` and `t:start()`, for setup with `start = false`. Systems added after the start boot right away.
+- `t:join(name?)`, `t:leave(player)`, `t:as(player, fn, ...)`, `t:player(name)` and `t:players()`, which work as on [the loopback](#client-and-server-in-one-vm-with-hydrogenloopback).
+- `t:advance(seconds)`, which moves the [fake clock](#time-and-the-fake-clock).
+- the expectations below, and `t:clear()`, which forgets what was delivered so far (e.g. after setup).
+- `t.app`, `t.net` and `t.clock`: the app, the loopback and the fake clock themselves.
+- `t:close()`, the teardown. `Hydrogen.test` calls it for you.
+
+For frameworks that split setup and teardown into hooks, `Hydrogen.harness(options?)` returns the same `t` without running a function. Call `t:close()` in `afterEach`. If a harness is still open when the next one opens, it is closed first with a warning, so one forgotten `close` can't break the tests after it.
+
+#### Expectations
+
+`t:expect(object)` checks what a network object **delivered**: what the receiving listeners or handler got.
+
+| Method | Passes when |
+| --- | --- |
+| `:fired(...)` | The event was delivered at least once, to or from anyone. |
+| `:firedTo(player, ...)` | A server event reached that client. |
+| `:firedBy(player, ...)` | The server received a client event from that client. |
+| `:notFired(player?)` | It was never delivered (to or from `player`, if given). |
+| `:firedTimes(n)` | It was delivered exactly `n` times. `FireAll` to three clients counts three. |
+| `:called(...)` | A function's handler ran with these arguments. |
+| `:calledBy(player, ...)` | A client function was called by `player`, or a server function was answered by `player`. |
+| `:returned(...)` | Some call returned exactly these values. |
+| `:notCalled()`, `:calledTimes(n)` | Never called, or called exactly `n` times. |
+| `:deliveries()` | Returns the deliveries, oldest first, for checks of your own. |
+
+On the harness itself: `t:expectNothingFired()` (no event or call at all), `t:expectWarning(text)`, `t:expectNoWarnings()`, `t:warnings()` and `t:deliveries(object?)`.
+
+- Arguments are optional. Without them, any arguments match. With them, the count must match, tables compare by value, and players compare by identity. `t.any` matches any one value: `firedTo(alice, "sword", t.any)`.
+- Expectations chain: `t:expect(Remotes.Bought):firedTo(alice):firedTimes(1)`.
+- Loopback delivers immediately, so expect right after firing. A message that middleware, the rate limiter or validation dropped was not delivered and doesn't count. Neither does a send to a player who left.
+- Recorded arguments are copies, so a listener that changes a table it received doesn't change what the test sees.
+- A failure errors at the line of the expectation and says what happened instead:
+
+```
+[HYDROGEN] Expected Bought to be fired to Alice with ("sword", 500), but it was fired 1 time:
+  to Bob: ("sword", 500)
+```
+
+- Using the wrong method for the kind of object errors with the right one, e.g. `firedTo is for serverEvents; Buy is a clientEvent, use firedBy`.
+
+#### Warnings
+
+While a test runs, its warnings are captured instead of printed. `t:expectWarning(text)` passes when a warning contains `text` (plain text, not a pattern) and marks every such warning as expected. `t:expectNoWarnings()` fails on any warning that isn't expected. Unexpected warnings are printed when the test ends, so nothing is hidden, and expected ones don't clutter the output.
+
+Under [Hydrogen's Lune runtime](#running-tests-under-lune) every `warn()` is captured, your systems' included. In Studio the harness captures the warnings Hydrogen's network emits (dropped payloads, unknown ids, mismatches); other `warn()` calls print as usual.
+
+#### Time and the fake clock
+
+Hydrogen reads time through `Hydrogen.Clock`, and so can your systems. The harness installs a fake clock, so timers only move when the test says so:
+
+```luau
+-- In a system
+function Autosave:start()
+	task.spawn(function()
+		while true do
+			Hydrogen.Clock.wait(60)
+			Data:saveAll()
+		end
+	end)
+end
+
+-- In a test: five saves, instantly
+Hydrogen.test({ systems = { Autosave, Data } }, function(t)
+	t:advance(5 * 60)
+end)
+```
+
+| `Hydrogen.Clock` | Same as |
+| --- | --- |
+| `Clock.now()` | `os.clock()`: seconds, for durations and cooldowns |
+| `Clock.time()` | `os.time()`: Unix seconds, for saved timestamps |
+| `Clock.wait(seconds?)` | `task.wait`; no argument waits for the next frame |
+| `Clock.delay(seconds, fn, ...)` | `task.delay`; `fn` can be a thread |
+| `Clock.cancel(thread)` | `task.cancel` |
+| `Clock.heartbeat(fn)` | `RunService.Heartbeat:Connect(fn)`, returning a function that disconnects it |
+
+- In a game each field is the built-in itself, so `Clock.now()` costs what `os.clock()` does.
+- Look the field up when you call it (`Clock.now()`). Don't keep a copy (`local now = Clock.now`): the fake clock replaces the fields, and a copy would keep real time.
+- Hydrogen uses it for the server function timeout, the rate limiter's refill and the batching flush. Code that calls `task.wait` or `os.clock` directly keeps real time.
+- `t:advance(seconds)` runs every timer due by then, in the order they are due (ties in the order they were scheduled). While a timer runs, `Clock.now()` reads that timer's due time. Then heartbeat fires once with `dt = seconds`, and threads waiting for the next frame resume. A loop that waits 60 seconds runs five times in `t:advance(300)`, and `t:advance(0)` steps one frame. To step frame by frame, loop over `t:advance(1 / 60)`.
+- A server function whose client never answers: call `Fire` in `task.spawn`, then `t:advance(10)`.
+- When the test ends, threads still waiting on the fake clock are never resumed. The exception is teardown itself: `playerRemoving` and `stop` hooks waiting on the fake clock are stepped until they finish (for up to 5 real seconds), so a save with a retry delay still completes.
+- Outside the harness: `local clock = Hydrogen.Clock.fake({ now = 0 })`, then `clock:advance(seconds)`, `clock:next()` (jump to the next timer), `clock:pending()` and `clock:restore()`. Only one fake clock can be installed at a time.
+
+#### Running tests under Lune
+
+Hydrogen ships the runtime its own tests run on, `src/Testing/Lune.luau`. It sets the Roblox globals: `game` with the usual services and a `RunService` stub, `Instance` and the datatypes from `@lune/roblox`, `task`, and a `warn` the harness can capture. It loads modules with a `require` that understands Roblox code: relative and `@self` paths, `.luaurc` aliases, pesde's package links and `require(script.Parent.Module)`. Modules get Roblox-style names such as `src.Systems.Shop`, so a system defined without an id gets the same id as in Studio.
+
+```luau
+-- test/run.luau, run with: lune run test/run
+local Lune = require("../roblox_packages/.pesde/atk422+hydrogen/<version>/hydrogen/src/Testing/Lune")
+Lune.install()
+
+local function require(path: string): any
+	return Lune.require(path) -- resolves from this file, like require
+end
+
+require("./Shop.spec")
+```
+
+- Load it with Lune's own `require`, before any game code.
+- `RunService:IsServer()` and `IsClient()` return `false`, so Hydrogen leaves the `Players` service and `BindToClose` alone, and the harness supplies players. Heartbeat never fires: use the fake clock.
+- Lune can't run a ModuleScript Instance. Register what one returns with `Lune.modules[moduleScript] = value` (also `_G.instanceModules`); requiring an unregistered one errors.
+- Nothing in a game requires this module, so it costs nothing there.
+
+#### Design: why one call
+
+- **Teardown is what tests forget**, and a test that leaks a running network, a loopback or a fake clock breaks the next test, far from the cause. A function scope makes cleanup unconditional. `Hydrogen.harness` covers frameworks that need setup and teardown in hooks, and closes a harness someone forgot.
+- **Expectations record deliveries, not `Fire` calls**, because a delivery is what the game sees: middleware, the rate limiter, validation, departed players and the handshake queue all apply. Recording happens in the network runtime behind one nil check per message. A global middleware would have seen data before validation, and would make every message allocate a context and clone its middleware chains.
+- **Expectations error** instead of returning booleans, so they work in every framework and in none, and each failure lists what did happen.
+- **The fake clock is on by default**, because a test that depends on real time is slow or flaky. Its fields replace the built-ins on the `Clock` table, rather than one wrapper checking a flag, so a game pays nothing. One heartbeat per `advance` keeps `t:advance(3600)` instant; a test that cares about frames steps them itself.
+
+#### The tools underneath
+
+`Hydrogen.test` is built on two tools you can also use on their own: `app:replace` swaps a dependency for a fake, and `Hydrogen.loopback()` stands in for the remotes so client and server systems can talk in one VM. Both work under Lune and in Studio. Used directly, they leave teardown to you.
 
 #### Faking a dependency with `app:replace`
 
@@ -513,7 +668,7 @@ Loopback methods:
 - `net:leave(player)`: the player leaves. Apps run `playerRemoving`; later sends to the player are dropped.
 - `net:players()`: the players still in. `serverEvent:FireAll` and `FireExcept` send to these.
 - `net:as(player, fn, ...)`: run `fn` as that client. Client events and functions fired inside it come from `player`. With exactly one client you don't need `as`; with several, a client send outside `as` errors.
-- `net:client()`: the client the running code acts as, inside `as` or inside a server event or function handler running on that client. Every fake client shares the same client-side listeners, so this is how a test tells them apart.
+- `net:client()`: the client the running code acts as, inside `as` or inside a server event or function handler running on that client. Every fake client shares the same client-side listeners, so this is how a test tells them apart. While the server handles a client's message, it is `nil`: that code runs as the server.
 - `net:close()`: everyone leaves, listeners and middleware added since the loopback opened are removed, and the network stops so the next test can start it again. Network names stay registered.
 
 How it differs from real remotes:
@@ -523,7 +678,7 @@ How it differs from real remotes:
 - Tables are copied and lose their metatables, as remotes do. Unreliable events are delivered reliably.
 - Fake players are tables with `Name`, `DisplayName`, `UserId` (negative), `Parent` and `Kick` (which makes them leave). They aren't Instances, so `player:IsA(...)` and other Instance methods don't exist on them.
 - `RunService:IsServer()` and `IsClient()` still return what the host says, so systems that branch on them see the same answer on both sides.
-- Under Lune, a network that an app started without a loopback is reset when the next loopback opens. In Studio, open the loopback before any app starts.
+- Opening a loopback starts from an empty network: events queued before it opened, by an earlier test or an app started without a loopback, are dropped. In Studio, open the loopback before any app starts.
 
 Systems are still module singletons: state a system keeps in its own tables lives across tests in the same VM. Reset it in `init`, or use one test file per scenario.
 
@@ -562,7 +717,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 79 | Passed: 79` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 106 | Passed: 106` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -570,6 +725,8 @@ Expected output ends with `Tests Ran: 79 | Passed: 79` and `status: OK`. A few `
 src/
   init.luau            public API and exported types
   App.luau             App: collects systems, runs init -> Network.init -> start, player and stop hooks
+  Clock.luau           time sources (now, time, wait, delay, cancel, heartbeat) and the fake clock
+  Log.luau             warnings go through here so the test harness can capture them
   Definition.luau      define/use, system ids, dependency graph wiring, replace redirects, lifecycle-stripping type function
   Graph.luau           generic dependency graph with topological sort and cycle detection
   Network/
@@ -579,31 +736,37 @@ src/
     Codec.luau         schema-driven buffer encoding for :Encode()
     Loopback.luau      in-memory remotes and fake players for headless tests
     ClientEvent.luau   ServerEvent.luau  ClientFunction.luau  ServerFunction.luau
+  Testing/
+    init.luau          Hydrogen.test and Hydrogen.harness
+    Expect.luau        expectations on deliveries, argument matching, failure messages
+    Lune.luau          Lune runtime: Roblox globals and a Roblox-style require (shipped for game tests)
 test/
-  _run.luau            Lune entry point: mocks Roblox globals, patches require, runs suites
-  App.luau  Definition.luau  Graph.luau  Network.luau
-  Testing.luau         app:replace and Hydrogen.loopback, used the way a game's tests would
+  _run.luau            Lune entry point: installs the Lune runtime, runs suites
+  App.luau  Clock.luau  Definition.luau  Graph.luau  Network.luau
+  Testing.luau         Hydrogen.test, app:replace and Hydrogen.loopback, used the way a game's tests would
+  Fixtures/            modules the suites require
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
 ```
 
 ### How the tests run
 
-Tests run outside Roblox under Lune. `test/_run.luau`:
+Tests run outside Roblox under Lune, on the same runtime game developers use ([Running tests under Lune](#running-tests-under-lune)). `test/_run.luau` requires `src/Testing/Lune.luau` with Lune's own `require`, calls `Lune.install()`, and shadows `require` with `Lune.require`, so every suite and everything it requires loads through the runtime:
 
-- builds a DataModel with `@lune/roblox` and sets the `game` / `Instance` / `task` globals;
-- stubs `RunService` so `IsClient()` and `IsServer()` both return `false`. Real remotes and the `Players` / `BindToClose` connections are never exercised. `test/Testing.luau` runs the network end to end through `Hydrogen.loopback()`; the other suites call `app:_addPlayer` / `app:_removePlayer` with fake players;
-- overrides `require` so `@self/` and relative paths resolve from the calling file, and redirects GreenTea to its pesde install path. Lune can't require Instances, so a test sets `_G.instanceModules[moduleScript] = value` and `require(moduleScript)` then returns `value`;
-- calls each test module, runs [frktest](https://github.com/itsfrank/frktest), then exits with `process.exit`. The explicit exit matters: the server function timeout test yields the main thread and resumes it from a timer, and without the exit Lune can keep running after the last suite.
+- `game` is a DataModel from `@lune/roblox`, with `RunService` stubbed so `IsClient()` and `IsServer()` both return `false`. Real remotes and the `Players` / `BindToClose` connections are never exercised. `test/Testing.luau` runs the network end to end through `Hydrogen.test` and `Hydrogen.loopback()`; the other suites call `app:_addPlayer` / `app:_removePlayer` with fake players.
+- `require` follows Roblox's require-by-string rules: in an `init.luau`, `./X` is a sibling of the folder and `@self/X` a child, as in Studio. It resolves `.luaurc` aliases, and runs `require(script.X)`, so GreenTea loads through its own `init`. Lune can't require Instances, so a test sets `_G.instanceModules[moduleScript] = value` and `require(moduleScript)` then returns `value`.
+- Modules are named like Roblox full names, so errors read `src.Network.Runtime:345: ...`.
+- It calls each test module, runs [frktest](https://github.com/itsfrank/frktest), then exits with `process.exit`. The explicit exit matters: the server function timeout test yields the main thread and resumes it from a timer, and without the exit Lune can keep running after the last suite.
 
-To add a test file: create `test/Thing.luau` that returns a function registering `test.suite(...)` blocks (copy the shape of `test/Graph.luau`), then add `require("./Thing")()` next to the others in `test/_run.luau`. The Network and Testing suites reset `Runtime` state in `test.on_suite_enter`; do the same if you touch Runtime. The Testing suite also stops its apps and closes its loopbacks in `test.on_test_leave`, so a failed test doesn't leak a running network into the next one.
+To add a test file: create `test/Thing.luau` that returns a function registering `test.suite(...)` blocks (copy the shape of `test/Graph.luau`), then add `require("./Thing")()` next to the others in `test/_run.luau`. Tests of systems should use `Hydrogen.test`, which cleans up after itself. Suites that drive Runtime directly (Network, the lower-level Testing cases) reset `Runtime` state in `test.on_suite_enter`, and stop their apps and close their loopbacks in `test.on_test_leave`, so a failed test doesn't leak a running network into the next one.
 
 ### Conventions
 
 - Strict mode is on for every file through `.luaurc` / `src/.luaurc`. Keep code type-checking clean.
 - Requires: `@self/...` from `init.luau` files, `./...` or `../...` elsewhere. GreenTea is loaded by relative path (`./roblox_packages/gt` from `src/init.luau`, `../../roblox_packages/gt` from `src/Network/*`).
 - Those paths rely on `src` and `roblox_packages` being siblings. That is the layout pesde generates for consumers, and `default.project.json` mirrors it for development. Don't move `roblox_packages` inside `src`. After changing `default.project.json`, regenerate the sourcemap with `rojo sourcemap default.project.json --output sourcemap.json`.
-- Runtime warnings and errors are prefixed with `[HYDROGEN]`.
+- Runtime warnings and errors are prefixed with `[HYDROGEN]`. Warn through `Log.warn` (`src/Log.luau`) so tests can capture it.
+- Read time and schedule work through `Clock` (`Clock.now()`, `Clock.delay(...)`, looked up at call time), never `os.clock` / `task.delay` directly, so the fake clock reaches it.
 - Match the indentation of the file you edit (most use tabs; some `Network/*` files use 4 spaces).
 - Public API changes go through `src/init.luau`. Update this README when the API or a network rule changes.
 

@@ -1,4 +1,5 @@
 local gt = require("../../roblox_packages/gt")
+local Log = require("../Log")
 local Codec = require("./Codec")
 local Middleware = require("./Middleware")
 local Runtime = require("./Runtime")
@@ -19,6 +20,7 @@ function ClientEvent.new<T...>(name: string, ...: T...): ClientEvent<T...>
     local event = {} :: ClientEvent<T...>
 
     event._name = name
+    event._kind = "ClientEvent"
     event._middleware = {}
     event._listeners = {}
     event._schema = gt.build(...)
@@ -32,8 +34,12 @@ function ClientEvent.new<T...>(name: string, ...: T...): ClientEvent<T...>
 
         local ok, cause = event._schema:matches(...)
         if not ok then
-            warn(`[HYDROGEN] Dropped invalid {name} from {player.Name}: {cause:formatErr()}`)
+            Log.warn(`[HYDROGEN] Dropped invalid {name} from {player.Name}: {cause:formatErr()}`)
             return
+        end
+
+        if Runtime.Observer then
+            Runtime:observeEvent("ClientEvent", name, player, ...)
         end
 
         -- Cloned so a listener that disconnects itself doesn't skip the next one.
@@ -82,7 +88,7 @@ function ClientEvent.new<T...>(name: string, ...: T...): ClientEvent<T...>
 
     local function receiveDecoded(player: Player, ok: boolean, ...: any)
         if not ok then
-            warn(`[HYDROGEN] Dropped undecodable {name} from {player.Name}: {(...)}`)
+            Log.warn(`[HYDROGEN] Dropped undecodable {name} from {player.Name}: {(...)}`)
             return
         end
         receive(player, ...)

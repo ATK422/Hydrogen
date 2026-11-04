@@ -1,4 +1,5 @@
 local gt = require("../../roblox_packages/gt")
+local Log = require("../Log")
 local Codec = require("./Codec")
 local Middleware = require("./Middleware")
 local Runtime = require("./Runtime")
@@ -29,6 +30,7 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
     local event = {} :: ServerEvent<T...>
 
     event._name = name
+    event._kind = "ServerEvent"
     event._middleware = {}
     event._listeners = {}
     event._schema = gt.build(...)
@@ -52,8 +54,12 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
 
         local ok, cause = event._schema:matches(...)
         if not ok then
-            warn(`[HYDROGEN] Dropped invalid {name} from server: {cause:formatErr()}`)
+            Log.warn(`[HYDROGEN] Dropped invalid {name} from server: {cause:formatErr()}`)
             return
+        end
+
+        if Runtime.Observer then
+            Runtime:observeEvent("ServerEvent", name, Runtime:loopbackClient(), ...)
         end
 
         -- Cloned so a listener that disconnects itself doesn't skip the next one.
@@ -118,7 +124,7 @@ function ServerEvent.new<T...>(name: string, ...: T...): ServerEvent<T...>
 
     local function receiveDecoded(ok: boolean, ...: any)
         if not ok then
-            warn(`[HYDROGEN] Dropped undecodable {name} from server: {(...)}`)
+            Log.warn(`[HYDROGEN] Dropped undecodable {name} from server: {(...)}`)
             return
         end
         receive(...)

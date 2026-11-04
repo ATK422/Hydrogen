@@ -3,6 +3,8 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local gt = require("../../roblox_packages/gt")
+local Clock = require("../Clock")
+local Log = require("../Log")
 local Middleware = require("./Middleware")
 
 -- Reserved so named events keep 1-based ids from assignIds.
@@ -17,12 +19,14 @@ local BATCH_OVERHEAD = 16
 
 export type InnerNetworkInfo<T...> = {
     _name: string,
+    _kind: Middleware.Kind,
     _middleware: { Middleware.Middleware<T...> },
     _schema: gt.Type,
 }
 
 export type InnerNetworkFunction<A..., R...> = {
     _name: string,
+    _kind: Middleware.Kind,
     _requestMiddleware: { Middleware.Middleware<A...> },
     _responseMiddleware: { Middleware.Middleware<R...> },
     _argsSchema: gt.Type,
@@ -47,6 +51,19 @@ export type LoopbackHost = {
     players: (self: any) -> { Player },
     owns: (self: any, value: any) -> boolean,
     handshake: (self: any) -> (),
+    client: (self: any) -> Player?,
+}
+
+-- One message a test saw delivered: what the receiving listeners or handler got.
+export type Observation = {
+    name: string,
+    kind: Middleware.Kind,
+    -- The client that received a server event or answered a server function, or the
+    -- client that sent a client event or called a client function.
+    player: Player?,
+    args: PackedArgs,
+    -- For functions: nil while the handler runs, then what it returned.
+    returns: PackedArgs?,
 }
 
 export type BatchedEvent = {
@@ -94,6 +111,8 @@ local Runtime = {
     ServerBatch = nil :: Batch?,
     -- Roblox drops UnreliableRemoteEvent messages over about 900 bytes.
     UnreliableLimit = 900,
+    -- Set by Hydrogen.test to record deliveries; nil in a game, so it costs one check per message.
+    Observer = nil :: ((Observation) -> ())?,
 }
 
 local function isClient(): boolean
@@ -199,7 +218,7 @@ function Runtime:init(options: InitOptions?)
     if Runtime.Initialized then
         -- Under loopback a server app and a client app share this runtime.
         if not Runtime.Loopback then
-            warn(`[HYDROGEN] Network already initialized`)
+            Log.warn(`[HYDROGEN] Network already initialized`)
         end
         return
     end
@@ -272,7 +291,7 @@ function Runtime:init(options: InitOptions?)
 
     -- Heartbeat is the last step of a frame, so events fired anywhere in it go out together.
     if Runtime.Batching then
-        RunService.Heartbeat:Connect(function()
+        Clock.heartbeat(function()
             Runtime:flushBatches()
         end)
     end
@@ -300,7 +319,7 @@ end
 
 function Runtime:registerNetworkObject(event: string, object: any)
     if Runtime.Initialized then
-        warn(`[HYDROGEN] Network already initialized ignoring {event} registration`)
+        Log.warn(`[HYDROGEN] Network already initialized ignoring {event} registration`)
         return
     end
 
@@ -447,7 +466,7 @@ function Runtime:markPlayerReady(player: Player, clientHash: unknown?): ({ Queue
     end
 
     if not matches then
-        warn(`[HYDROGEN] NETWORK MISMATCH with {player.Name}: the client registered different network names than the server (client {string.sub(tostring(clientHash), 1, 32)}, server {serverHash}). Ids come from sorted names, so a name on one side only sends messages to the wrong objects. Register the same modules with addNetwork on both sides.`)
+        Log.warn(`[HYDROGEN] NETWORK MISMATCH with {player.Name}: the client registered different network names than the server (client {string.sub(tostring(clientHash), 1, 32)}, server {serverHash}). Ids come from sorted names, so a name on one side only sends messages to the wrong objects. Register the same modules with addNetwork on both sides.`)
     end
 
     Runtime.ReadyPlayers[player] = true
@@ -469,7 +488,7 @@ function Runtime:requestReady()
 
     local batch, matches = remote:InvokeServer(PROTOCOL_READY, Runtime:namesHash())
     if matches == false then
-        warn(`[HYDROGEN] NETWORK MISMATCH: this client registered different network names than the server ({Runtime:namesHash()} here). Messages will reach the wrong objects. Register the same modules with addNetwork on both sides.`)
+        Log.warn(`[HYDROGEN] NETWORK MISMATCH: this client registered different network names than the server ({Runtime:namesHash()} here). Messages will reach the wrong objects. Register the same modules with addNetwork on both sides.`)
     end
     if not batch then
         return
@@ -698,11 +717,11 @@ function Runtime:fireClientFunction(name: string, player: Player, timeout: numbe
 
     -- InvokeClient can fail without yielding (e.g. the player already left).
     if not result then
-        local timer = task.delay(timeout, finish, table.pack(false, `[HYDROGEN] Network function {name} timed out after {timeout}s waiting for {player.Name}`))
+        local timer = Clock.delay(timeout, finish, table.pack(false, `[HYDROGEN] Network function {name} timed out after {timeout}s waiting for {player.Name}`))
         waiting = true
         coroutine.yield()
         if coroutine.status(timer) == "suspended" then
-            task.cancel(timer)
+            Clock.cancel(timer)
         end
     end
 
@@ -733,13 +752,13 @@ end
 function Runtime:handleEvent(id: number, ...: any)
     local name = Runtime.IdToNameMap[id]
     if not name then
-        warn(`[HYDROGEN] Dropped event with unknown network id {id}`)
+        Log.warn(`[HYDROGEN] Dropped event with unknown network id {id}`)
         return
     end
 
     local handler = Runtime.EventHandlers[name]
     if not handler then
-        warn(`[HYDROGEN] No callbacks registered for event {name}`)
+        Log.warn(`[HYDROGEN] No callbacks registered for event {name}`)
         return
     end
 
@@ -761,7 +780,7 @@ function Runtime:handleBatch(sender: Player?, ...: any)
     while index <= values.n do
         local id, count = values[index], values[index + 1]
         if type(count) ~= "number" or count % 1 ~= 0 or count < 0 or index + 1 + count > values.n then
-            warn(`[HYDROGEN] Dropped malformed event batch`)
+            Log.warn(`[HYDROGEN] Dropped malformed event batch`)
             return
         end
 
@@ -775,11 +794,41 @@ function Runtime:handleBatch(sender: Player?, ...: any)
     end
 end
 
+-- Reports a delivered event to the test observing the network, if there is one.
+function Runtime:observeEvent(kind: Middleware.Kind, name: string, player: Player?, ...: any)
+    local observe = Runtime.Observer
+    if observe then
+        observe({ name = name, kind = kind, player = player, args = table.pack(...) :: PackedArgs })
+    end
+end
+
+-- Calls handler(player, ...) and, while a test observes the network, records the arguments
+-- before the call and what it returned after.
+function Runtime:observeCall(kind: Middleware.Kind, name: string, player: Player?, handler: (Player?, ...any) -> ...any, ...: any): ...any
+    local observe = Runtime.Observer
+    if not observe then
+        return handler(player, ...)
+    end
+
+    local observation: Observation = { name = name, kind = kind, player = player, args = table.pack(...) :: PackedArgs }
+    observe(observation)
+    local returns = table.pack(handler(player, ...)) :: PackedArgs
+    observation.returns = returns
+    observe(observation)
+    return table.unpack(returns, 1, returns.n)
+end
+
+-- The fake client the running code acts as under loopback.
+function Runtime:loopbackClient(): Player?
+    local loopback = Runtime.Loopback
+    return if loopback then loopback:client() else nil
+end
+
 function Runtime:handleFunction(id: number, ...: any): any
     local name = Runtime:getNameFromId(id)
     local callback = Runtime.FunctionCallbacks[name]
     if not callback then
-        warn(`[HYDROGEN] No callbacks registered for function {name}`)
+        Log.warn(`[HYDROGEN] No callbacks registered for function {name}`)
         return
     end
 
