@@ -13,6 +13,8 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - `Hydrogen.Clock`: `now`, `time`, `wait`, `delay`, `cancel` and `heartbeat`, which are the built-ins in a game, and `Clock.fake(options?)`, a controllable clock (`advance`, `next`, `pending`, `restore`). The harness installs one, so timeouts, rate-limit refills and timers in systems run deterministically with `t:advance(seconds)`.
 - `src/Testing/Lune.luau`: the Lune runtime Hydrogen's tests run on, shipped so games can run system tests under Lune. `Lune.install()` sets the Roblox globals; `Lune.require` loads modules with Roblox require rules, `.luaurc` aliases, pesde package links and `require(script...)`, and names them like Roblox full names so inferred system ids match Studio.
 - Types `Harness`, `TestOptions`, `Expectation`, `Delivery`, `FakeClock` and `FakeClockOptions`.
+- `Hydrogen.Scope` and the `Scope` type: cleanup tied to lifetimes. A scope tracks functions, threads, connections, Instances, other scopes and objects with `Destroy`, `Disconnect` or `cancel`, and cleans them newest first; a task that errors is warned about and the rest still run. `scope:connect`, `scope:spawn`, `scope:delay` and `scope:child` create and track in one call. A destroyed scope cleans anything added to it straight away.
+- System and player scopes: `Hydrogen.Scope.of(system)` and `Hydrogen.Scope.of(system, player)`, created on first use and the same from anywhere. Player scopes are destroyed right after the system's `playerRemoving` for that player (reverse dependency order); system scopes right after the system's `stop` hook on `app:stop()`, or when the boot fails. Systems that never ask create no scope, and hooks are called as before.
 
 ### Changed
 

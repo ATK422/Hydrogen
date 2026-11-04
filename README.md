@@ -60,9 +60,10 @@ Hydrogen.test           -- one call per test: loopback, fake clock, app, fakes, 
 Hydrogen.harness        -- the same harness for frameworks with setup/teardown hooks
 Hydrogen.Clock          -- time for systems and tests: Clock.now(), wait, delay, heartbeat, fake()
 Hydrogen.gt             -- GreenTea, for writing schemas
+Hydrogen.Scope          -- cleanup tied to lifetimes: Scope.new(), Scope.of(system, player?)
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -150,6 +151,78 @@ Hydrogen calls them in dependency order, so you don't depend on the order Roblox
 - A hook that errors is reported with `[HYDROGEN] <hook> failed in system <full name>` and the remaining systems still run, so one broken system can't stop `Data` from saving.
 - A system added after `app:start()` gets `playerAdded` for players already in the game.
 - The player hooks run on the client too (for every player, including the local one). `stop` is only bound on the server; on the client you can call `app:stop()` yourself.
+- For cleanup tied to the system or to a player, ask for a scope with `Hydrogen.Scope.of`. See [Scopes](#scopes).
+
+### Scopes
+
+A scope collects what has to be undone (connections, threads, Instances, cleanup functions) and undoes it all when its lifetime ends. Every system has one that lasts until `app:stop()`, and one per player that lasts until that player leaves. Ask for them with `Hydrogen.Scope.of`:
+
+```luau
+local Scope = Hydrogen.Scope
+
+return Hydrogen.define(function(use)
+	local Combat = {}
+
+	function Combat:start()
+		-- Destroyed on app:stop(), right after Combat's stop hook.
+		Scope.of(self):connect(RunService.Heartbeat, stepProjectiles)
+	end
+
+	function Combat:playerAdded(player: Player)
+		-- Destroyed when the player leaves, right after Combat's playerRemoving for them.
+		local scope = Scope.of(self, player)
+		local arena = scope:add(ArenaTemplate:Clone())
+		arena.Parent = workspace.Arenas
+		scope:connect(player.CharacterAdded, onCharacter)
+		scope:spawn(function()
+			while true do
+				task.wait(1)
+				regenerate(player)
+			end
+		end)
+	end
+
+	return Combat
+end)
+```
+
+`Scope.of(system)` is the system's scope and `Scope.of(system, player)` its scope for that player. Each is created the first time it's asked for, and every later call returns the same one, so it works the same from a hook, a remote handler, a callback or another system (`Scope.of(Combat, player)`). `Hydrogen.Scope.new(name?)` makes one you destroy yourself.
+
+| Method | Does |
+| --- | --- |
+| `scope:add(task)` | Tracks `task` and returns it. On cleanup a function is called, a thread cancelled, an `RBXScriptConnection` disconnected, an Instance or scope destroyed, and any other object gets its `Destroy`, `Disconnect`, `destroy`, `disconnect` or `cancel` (a promise) method called. Anything else errors when added. |
+| `scope:connect(signal, callback)` | `signal:Connect(callback)`, tracked. Any signal with `Connect` works. |
+| `scope:spawn(fn, ...)`, `scope:delay(seconds, fn, ...)` | `task.spawn` / `task.delay`, cancelled if the scope goes first. |
+| `scope:child(name?)` | A scope destroyed with this one, or earlier with `child:destroy()`: one per round, per character, per open UI. |
+| `scope:remove(task)` | Cleans one task now and stops tracking it. |
+| `scope:destroy()` | Cleans everything. `scope:Destroy()` is the same, so Trove, Maid and Janitor can hold a scope. |
+| `scope.alive` | `false` once destroyed. |
+
+Network listeners go in with `add`, because `:On` returns a disconnect function: `scope:add(Remotes.Chat:On(onChat))`.
+
+Rules:
+
+- **Cleanup runs newest first**, like `defer`: what you made later may depend on what you made earlier.
+- A task that errors is reported with `[HYDROGEN] Cleanup failed in scope <name>: <error>`, and the rest still run.
+- Cleanup runs in the thread that destroys the scope. A task that yields delays the next one, and for a player scope also the next system's `playerRemoving`, like a yielding hook.
+- **Destroyed is final.** Anything added to a destroyed scope is cleaned straight away, and `spawn` / `delay` on it never run. So work that finishes after its player left (a DataStore load, a delay) can't leak. After a yield, check `scope.alive` to skip work for a player who's gone.
+- A player scope is open from the player's first `playerAdded` hook until the system's `playerRemoving` for them returns, so it is destroyed in reverse dependency order: a system's scope for a player is gone before the systems it `use`s run their `playerRemoving`. If the player leaves while `playerAdded` is still running, cleanup waits for it like `playerRemoving` does.
+- A system scope is open from `init` until `app:stop()`, and is destroyed right after the system's `stop` hook. A boot that errors destroys the system scopes too.
+- `Scope.of` after a lifetime ended returns a destroyed scope. It errors for a system that no started app runs, and for a player the app hasn't added yet.
+- Under `app:replace`, `Scope.of(original)` and `Scope.of(fake)` are the same scope, so the fake and the systems that `use` the original agree.
+- Adding the same task twice tracks it once. A thread that destroys its own scope isn't cancelled; it finishes what it's doing.
+- A system that never calls `Scope.of` creates no scope. Hooks are called exactly as before; Hydrogen never passes a scope in.
+
+What can't be automatic: Luau has no hook into `RBXScriptSignal:Connect`, `task.spawn` or `Instance.new`, so a scope only knows what goes through it. Use `scope:connect`, `scope:spawn`, `scope:delay` and `scope:add` where you would have called those directly.
+
+#### Why scopes work this way
+
+- **You ask for a scope; hooks aren't handed one.** Getting a scope is always one visible call, `Scope.of`, and hook signatures stay what they were. Scopes are created on first use, so a system that never asks pays nothing.
+- **`Scope.of(system, player)`, not an ambient "current scope".** A current scope tracked per thread would be lost in every connection callback and `task.spawn`, which is exactly where most cleanup is created. `Scope.of` works from any thread.
+- **Network listeners aren't tracked behind your back.** A listener registered in `playerAdded` usually serves every player (handlers receive the player), so disconnecting it when the first player leaves would be a bug you'd have to fight. `scope:add(event:On(...))` says what you mean and keeps the callback typed.
+- **Closed scopes clean instead of erroring.** The usual cleanup bug is async work finishing after its player left. Cleaning what it adds makes that safe without a check at every step.
+- **Destroy is final, so there's no reuse.** A stale reference to last round's scope can't leak into this round. Make a `child()` per round instead.
+- Tasks are kept in a table keyed by the task with an insertion counter, so `add`, `remove` and finished threads forgetting themselves are O(1), and `destroy` sorts once.
 
 ### Network definitions
 
@@ -736,6 +809,8 @@ src/
     Codec.luau         schema-driven buffer encoding for :Encode()
     Loopback.luau      in-memory remotes and fake players for headless tests
     ClientEvent.luau   ServerEvent.luau  ClientFunction.luau  ServerFunction.luau
+  Scope/
+    init.luau          Scope: cleanup tied to lifetimes; Scope.of looks up the scopes App keeps
   Testing/
     init.luau          Hydrogen.test and Hydrogen.harness
     Expect.luau        expectations on deliveries, argument matching, failure messages
@@ -744,6 +819,7 @@ test/
   _run.luau            Lune entry point: installs the Lune runtime, runs suites
   App.luau  Clock.luau  Definition.luau  Graph.luau  Network.luau
   Testing.luau         Hydrogen.test, app:replace and Hydrogen.loopback, used the way a game's tests would
+  Scope.luau           Scope on its own, and the system and player scopes an app keeps
   Fixtures/            modules the suites require
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version

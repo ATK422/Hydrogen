@@ -3,6 +3,7 @@ local App = require("@self/App")
 local Network = require("@self/Network")
 local Clock = require("@self/Clock")
 local Testing = require("@self/Testing")
+local Scope = require("@self/Scope")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -23,6 +24,7 @@ export type LoggerOptions = Network.LoggerOptions
 export type RateLimitOptions = Network.RateLimitOptions
 export type Namespace = Network.Namespace
 export type Loopback = Network.Loopback
+export type Scope = Scope.Scope
 
 export type Harness = Testing.Harness
 export type TestOptions = Testing.TestOptions
@@ -54,4 +56,6 @@ return {
 	DROP = Network.DROP,
 	-- The GreenTea instance Hydrogen validates with, so schemas always match its version.
 	gt = gt,
+	-- Cleanup tied to a lifetime: Scope.new(), or Scope.of(system, player?) for an app's scopes.
+	Scope = Scope,
 }

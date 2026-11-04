@@ -3,8 +3,10 @@ local RunService = game:GetService("RunService")
 
 local Network = require("./Network")
 local Definition = require("./Definition")
+local Scope = require("./Scope")
 
 type System = Definition.Lifecycle
+type Scope = Scope.Scope
 
 export type AppOptions = {
 	-- Print how long each system's init and start took.
@@ -19,6 +21,11 @@ type PlayerState = {
 	-- Every playerAdded hook has returned.
 	added: boolean,
 	removing: boolean,
+	-- While removing, the index in _ordered of the system whose playerRemoving is running.
+	-- Systems after it are done with the player, so their scopes for it are closed.
+	removingAt: number,
+	-- Each system's scope for this player, created the first time the system asks.
+	scopes: { [System]: Scope }?,
 }
 
 local App = {
@@ -32,6 +39,12 @@ local App = {
 	_redirected = {} :: { System },
 	-- Players whose playerRemoving hooks are still running.
 	_removing = 0,
+	-- System scopes, created the first time a system asks.
+	_scopes = {} :: { [System]: Scope },
+	-- Players whose playerRemoving hooks have all run, so late Scope.of calls get a closed scope.
+	_departed = {} :: { [Player]: true },
+	-- What Scope.of calls for this app's systems.
+	_owner = nil :: ((system: any, player: Player?) -> (Scope?, string?))?,
 	_started = false,
 	_stopped = false,
 	_debug = false,
@@ -118,6 +131,9 @@ function App.new(options: AppOptions?): typeof(App)
 	app._replacements = {}
 	app._redirected = {}
 	app._removing = 0
+	app._scopes = {}
+	app._departed = setmetatable({}, { __mode = "k" }) :: any
+	app._owner = nil
 	app._started = false
 	app._stopped = false
 	return app
@@ -127,6 +143,7 @@ function App:addSystem(system: System)
 	table.insert(self._systems, system)
 
 	if self._started then
+		Scope._own(system, self._owner :: any)
 		boot(system, "init")
 		boot(system, "start")
 
@@ -190,15 +207,14 @@ end
 function App:start()
 	self._started = true
 
-	if next(self._replacements) == nil then
-		self:_boot()
-		return
-	end
-
-	-- A failed boot must not leave the originals pointing at this app's fakes.
+	-- A failed boot must not leave the originals pointing at this app's fakes, or leave
+	-- running what systems added to their scopes in init.
 	self:_redirect()
 	local ok, err = pcall(self._boot, self)
 	if not ok then
+		for index = #self._ordered, 1, -1 do
+			self:_closeSystemScope(self._ordered[index])
+		end
 		self:_restore()
 		error(err, 0)
 	end
@@ -208,6 +224,18 @@ function App:_boot()
 	self._ordered = {}
 	for index, system in Definition.order(self._systems) do
 		self._ordered[index] = self._replacements[system] or system
+	end
+
+	-- Dependents hold the original, so Scope.of(original) has to reach the fake's scope too.
+	self._owner = function(system, player)
+		return self:_scopeOf(system, player)
+	end
+	for _, system in self._systems do
+		Scope._own(system, self._owner :: any)
+		local fake = self._replacements[system]
+		if fake then
+			Scope._own(fake, self._owner :: any)
+		end
 	end
 
 	local initTimes: { [System]: number } = {}
@@ -267,7 +295,8 @@ function App:_printTimings(total: number, network: number, initTimes: { [System]
 end
 
 -- Runs playerRemoving for every player still in the game, waits for all of those
--- hooks to finish, then runs stop hooks in reverse dependency order and undoes replace.
+-- hooks to finish, then runs stop hooks in reverse dependency order (destroying each
+-- system's scope right after its hook) and undoes replace.
 -- On the server this is bound to game:BindToClose.
 function App:stop()
 	if self._stopped then
@@ -288,10 +317,73 @@ function App:stop()
 	end
 
 	for index = #self._ordered, 1, -1 do
-		runHook(self._ordered[index], "stop")
+		local system = self._ordered[index]
+		runHook(system, "stop")
+		self:_closeSystemScope(system)
 	end
 
 	self:_restore()
+end
+
+-- Scope.of for this app's systems. Originals resolve to the fake standing in for them.
+function App:_scopeOf(system: any, player: Player?): (Scope?, string?)
+	system = self._replacements[system] or system
+	if player == nil then
+		return self:_systemScope(system)
+	end
+	return self:_playerScope(system, player)
+end
+
+function App:_systemScope(system: System): Scope
+	local scope = self._scopes[system]
+	if scope == nil then
+		scope = Scope.new(Definition.describe(system))
+		self._scopes[system] = scope
+	end
+	return scope
+end
+
+-- After the system's stop hook, or when the boot fails. Scope.of then hands out a closed scope.
+function App:_closeSystemScope(system: System)
+	local scope = self._scopes[system]
+	if scope then
+		scope:destroy()
+	else
+		self._scopes[system] = Scope._closed
+	end
+end
+
+-- Open from the player's first playerAdded hook until this system's playerRemoving for them returns.
+function App:_playerScope(system: System, player: Player): (Scope?, string?)
+	local state = self._players[player]
+	if state == nil then
+		if self._departed[player] or self._stopped then
+			return Scope._closed
+		end
+		return nil, `{player.Name} hasn't been added to the app yet. Ask for a player's scope from playerAdded or later`
+	end
+
+	local scopes = state.scopes
+	if scopes == nil then
+		scopes = {}
+		state.scopes = scopes
+	end
+
+	local scope = scopes[system]
+	if scope then
+		return scope
+	end
+
+	if state.removing then
+		local index = table.find(self._ordered, system)
+		if index == nil or index > state.removingAt then
+			return Scope._closed
+		end
+	end
+
+	scope = Scope.new(`{Definition.describe(system)} for {player.Name}`)
+	scopes[system] = scope
+	return scope
 end
 
 -- Players and shutdown only exist in a running game or under loopback; the tests call the hooks directly otherwise.
@@ -336,6 +428,8 @@ function App:_addPlayer(player: Player)
 	local state: PlayerState = {
 		added = false,
 		removing = false,
+		removingAt = math.huge,
+		scopes = nil,
 	}
 	self._players[player] = state
 
@@ -350,6 +444,7 @@ function App:_addPlayer(player: Player)
 end
 
 -- Calls playerRemoving on each system in reverse dependency order, after playerAdded has finished.
+-- Each system's scope for the player is destroyed right after its hook.
 function App:_removePlayer(player: Player)
 	local state = self._players[player]
 	if not state or state.removing then
@@ -364,10 +459,18 @@ function App:_removePlayer(player: Player)
 	end
 
 	for index = #self._ordered, 1, -1 do
-		runHook(self._ordered[index], "playerRemoving", player)
+		local system = self._ordered[index]
+		state.removingAt = index
+		runHook(system, "playerRemoving", player)
+
+		local scope = state.scopes and state.scopes[system]
+		if scope then
+			scope:destroy()
+		end
 	end
 
 	self._players[player] = nil
+	self._departed[player] = true
 	self._removing -= 1
 end
 
