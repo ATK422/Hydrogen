@@ -10,6 +10,7 @@ local Log = require("./Log")
 local Network = require("./Network")
 local Runtime = require("./Network/Runtime")
 local State = require("./State")
+local Input = require("./Input")
 local Expect = require("@self/Expect")
 
 export type Expectation = Expect.Expectation
@@ -354,6 +355,8 @@ function Testing.harness(options: TestOptions?): Harness
 		end
 		-- State values are module singletons; the next test starts from their initial values.
 		step(State.reset)
+		-- So are input actions: bindings, contexts, held keys and listeners start fresh.
+		step(Input.reset)
 		if Runtime.Observer == record then
 			Runtime.Observer = nil
 		end

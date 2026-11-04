@@ -8,6 +8,7 @@ local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
+local Input = require("@self/Input")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -65,6 +66,16 @@ export type Marketplace = Receipts.Marketplace
 export type MemoryReceiptStore = Receipts.MemoryStore
 export type FakeMarketplace = Receipts.FakeMarketplace
 
+export type InputAction<V> = Input.Action<V>
+export type InputContext = Input.Context
+export type InputDevice = Input.Device
+export type InputKey = Input.Key
+export type InputBinding = Input.Binding
+export type InputSavedBindings = Input.SavedBindings
+export type InputGlyph = Input.Glyph
+export type InputConflict = Input.Conflict
+export type InputSource<V> = Input.Source<V>
+
 return {
 	App = App,
 	define = Definition.define,
@@ -98,4 +109,6 @@ return {
 	State = State,
 	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
 	Receipts = Receipts,
+	-- Client input actions: contexts with priorities, rebinding, device glyphs, touch buttons.
+	Input = Input,
 }

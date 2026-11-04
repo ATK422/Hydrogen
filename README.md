@@ -73,9 +73,10 @@ Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Da
 Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
 Hydrogen.Receipts       -- kit: routes ProcessReceipt and grants each purchase once; add it to the app
+Hydrogen.Input          -- client input actions: contexts with priorities, rebinding, device glyphs, touch buttons
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Input: `Hydrogen.InputAction<V>`, `Hydrogen.InputContext`, `Hydrogen.InputDevice`, `Hydrogen.InputKey`, `Hydrogen.InputBinding`, `Hydrogen.InputSavedBindings`, `Hydrogen.InputGlyph`, `Hydrogen.InputConflict` and `Hydrogen.InputSource<V>`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -1200,6 +1201,186 @@ To fake Receipts itself in a system's test, use `app:replace(Hydrogen.Receipts, 
 - **When unsure, `NotProcessedYet`.** Roblox keeps offering an unacknowledged receipt, so `NotProcessedYet` only delays a purchase, while a wrong `PurchaseGranted` loses it. Because the store keeps the record, a later try can't grant twice.
 - **Waiting, not refusing, while the player loads.** Pending receipts are offered as the player joins, exactly when their data is still loading. Refusing them would leave the purchase until the player's next visit.
 - **One receipt per player at a time.** Grants for the same player can't interleave with each other's saves, so the reasoning above holds for each receipt.
+
+### Input
+
+`Hydrogen.Input` maps keys to actions on the client. You declare each action once, with its bindings for keyboard and mouse, gamepad and touch. Game code then reacts to `Jump` or `Move`, never to `Enum.KeyCode.Space`.
+
+```luau
+-- ReplicatedStorage/Client/Controls.luau (required by client systems)
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local Input = Hydrogen.Input
+local Key = Enum.KeyCode
+
+local Gameplay = Input.context("Gameplay")
+local Menu = Input.context("Menu", { priority = 10, sink = true, enabled = false })
+
+return {
+	Gameplay = Gameplay,
+	Menu = Menu,
+	Jump = Gameplay:button("Jump", { Key.Space, Key.ButtonA }),
+	Sprint = Gameplay:button("Sprint", { Key.LeftShift, Key.ButtonL3 }),
+	Interact = Gameplay:button("Interact", { Key.E, Key.ButtonX }, { touch = true }),
+	Ability1 = Gameplay:button("Ability1", { Key.Q, Key.ButtonL1 }, { touch = { text = "Dash" } }),
+	Move = Gameplay:vector2("Move", { { up = Key.W, down = Key.S, left = Key.A, right = Key.D }, Key.Thumbstick1 }),
+	Aim = Gameplay:vector2("Aim", { Enum.UserInputType.MouseMovement, Key.Thumbstick2 }),
+	Zoom = Gameplay:axis("Zoom", { Enum.UserInputType.MouseWheel, { positive = Key.I, negative = Key.O } }),
+	Close = Menu:button("Close", { Key.Backspace, Key.ButtonB }),
+}
+```
+
+```luau
+-- A client system
+local Controls = require(ReplicatedStorage.Client.Controls)
+
+function Movement:start()
+	local scope = Hydrogen.Scope.of(self)
+	scope:add(Controls.Jump:onBegan(function()
+		humanoid.Jump = true
+	end))
+	scope:add(Controls.Interact:onHold(0.5, openDoor))
+	scope:connect(RunService.RenderStepped, function(dt)
+		local walkSpeed = if Controls.Sprint:held() then 24 else 16
+		local move: Vector2 = Controls.Move:value()
+		-- ...
+	end)
+end
+```
+
+Action kinds:
+
+| Kind | `value()` | Binds |
+| --- | --- | --- |
+| `button` | `boolean` | Keys, mouse buttons, gamepad buttons and triggers. `{ key = S, modifiers = { LeftControl } }` for a combination. |
+| `axis` | `number`, -1 to 1 (0 to 1 from a trigger) | Keys (1 while held), `{ positive = E, negative = Q }`, triggers, a stick axis `{ key = Thumbstick2, axis = "y" }`, `MouseWheel` |
+| `vector2` | `Vector2`, up to length 1 | `{ up, down, left, right }`, thumbsticks, `MouseMovement` (a delta) |
+
+`Input.button`, `Input.axis` and `Input.vector2` put an action in the default context (priority 0, always enabled), for games that don't need contexts. Any binding takes `scale` (for example `-1` to invert).
+
+Every action has the same events, and each returns a disconnect function for `scope:add`:
+
+| Method | Does |
+| --- | --- |
+| `onBegan(fn(value))` | A press starts, or the value leaves zero. |
+| `onEnded(fn())` | The last press is released, or the value returns to zero. |
+| `onChanged(fn(value, previous))` | Every change of `value()`, including the begin and the end. |
+| `onHold(seconds, fn())` | Once per press, after it has been held for `seconds`. |
+| `value()`, `held()` | Current value, and whether it is pressed or non-zero. |
+
+#### Contexts
+
+A context groups actions that are enabled together: gameplay, a menu, a vehicle. When a key is pressed, enabled contexts see it from the highest priority down. A context with `sink = true` keeps the keys it binds from reaching lower-priority contexts. Contexts with the same priority all receive a key.
+
+```luau
+function Inventory:open()
+	local scope = Hydrogen.Scope.new("Inventory")
+	Controls.Menu:enableFor(scope)
+	Controls.Gameplay:disableFor(scope) -- no walking while the inventory is open
+	self.scope = scope
+end
+
+function Inventory:close()
+	self.scope:destroy() -- both undone
+end
+```
+
+`enable()`, `disable()` and `setEnabled(on)` set a context's own state. `enableFor(scope?)` and `disableFor(scope?)` are counted: two open menus keep `Menu` enabled until both close. A `disableFor` that is still open wins over everything else. Each returns its undo function, which also runs when the scope is destroyed.
+
+#### Rebinding and saving
+
+```luau
+local ok, conflicts = Controls.Jump:rebind(Enum.KeyCode.F)
+if not ok then
+	-- conflicts[1].action.name == "Interact": ask the player, then:
+	Controls.Jump:rebind(Enum.KeyCode.F, { conflict = "swap" })
+end
+
+-- "Press a key" prompt: the next keyboard press is taken, and no action sees it.
+Input.captureKey(function(key)
+	Controls.Sprint:rebind(key, { conflict = "swap" })
+end, "keyboard")
+
+-- Save and load (where to store them is up to you, e.g. a Hydrogen.Data field via a clientEvent).
+Input.onBindingsChanged(function()
+	Remotes.SaveBindings:Fire(Input.saveBindings())
+end)
+Input.loadBindings(savedFromServer)
+```
+
+- `rebind(binding, { slot?, conflict? })` replaces the `slot`-th binding (1 by default) of the binding's device (keyboard or gamepad). A slot past the end adds a binding. If another action would fire from the same press, `conflict` decides what happens: `"reject"` (the default) changes nothing and returns `false` with the conflicts, `"swap"` gives the other action the old binding, `"unbind"` removes the other action's binding, and `"allow"` keeps both. In a composite such as WASD, only the clashing direction changes: `"swap"` puts the old key there, and `"unbind"` removes just that direction. If the other action can't use the old binding, `"swap"` removes the clashing binding instead.
+- Two bindings conflict when one press would trigger both: the same key and the same modifiers, or a key that is part of a composite. Contexts count when both could be enabled at once and neither sinks the other. A disabled context still counts, because it can be enabled later.
+- `conflicts(binding, slot?)` returns those conflicts without changing anything, for marking clashes in a settings menu. `unbind(device, slot?)` and `resetBindings()` (or `Input.resetBindings()` for every action) do what their names say.
+- `Input.saveBindings()` returns only the actions the player changed: `{ Jump = { keyboard = { "F" } } }`. Keys are saved as names, so the table can go straight into a DataStore. Players who never rebound an action get new defaults from game updates.
+- `Input.loadBindings(saved)` resets everything to the defaults, then applies `saved`. It skips actions that no longer exist without a warning. It skips invalid bindings, and bindings saved under the wrong device, with a warning. If none of a device's saved bindings are valid, that device keeps its defaults. An empty list means the player unbound the device.
+
+#### Devices, glyphs and touch
+
+```luau
+Input.device() -- "keyboard" (keyboard and mouse), "gamepad" or "touch": whatever the player used last
+Input.onDeviceChanged(function(device, previous) end)
+
+-- A prompt that always shows the right key: called now, and again on device switch or rebind.
+scope:add(Controls.Interact:observeGlyph(function(glyph)
+	label.Text = if glyph then glyph.text else ""
+	icon.Image = if glyph and glyph.image then glyph.image else ""
+end))
+
+-- Your own icon set: return a Glyph, or nil for Hydrogen's.
+Input.glyphs(function(key, device)
+	local image = MyIcons[device][key]
+	return if image then { key = key, device = device, text = key, image = image } else nil
+end)
+```
+
+A glyph is `{ key, device, text, image? }` for the action's first binding on the device. `text` is readable: `"E"`, `"Shift"`, `"Ctrl+S"`, `"W/S/A/D"`, `"LMB"`. In a game, letter keys follow the player's keyboard layout, and gamepad buttons get the platform's button images (`UserInputService:GetImageForKeyCode`). On touch, a glyph describes the action's on-screen button, or is `nil` if it has none.
+
+Touch:
+
+- `touch = true` on a button action gives it an on-screen button. The button is made the first time the player uses touch. It sits in a grid above Roblox's jump button, and shows only while its context is enabled. `touch = { text, image, position, size }` styles it, and setting `position` or `size` takes it out of the grid.
+- `action:touchButton()` returns the made button, so you can restyle or reparent it.
+- For full control, make your own `GuiButton` and call `Input.bindButton(action, button, scope?)`. The action stays pressed while any finger is on the button, including a finger that slid off before lifting.
+- For a custom joystick or any other control, `Input.source(action)` returns a handle with `set(value)`, `press()`, `release()` and `destroy()`.
+
+#### Rules
+
+- **Client only.** `Hydrogen.Input` listens to `UserInputService` once the first action is defined on a client. On the server, definitions work, so a shared module can define them, but nothing fires. The first listener registered on the server warns.
+- **Typing and UI don't trigger actions.** Presses that Roblox marks as game-processed (typing in a TextBox, clicking a GuiButton) begin nothing. Releases always count, so nothing stays stuck. A stick that steers UI selection reads as zero. When the window loses focus, every key and stick is released.
+- **Disabling a context, or sinking its keys, ends its held actions.** Re-enabling doesn't press a button that is still held, so closing a menu with Space held doesn't jump. Axes resume from what is held, so walking continues when a menu closes over a held W.
+- **Modifiers:** `Ctrl+S` fires only the binding with the most modifiers held, not a plain `S` button binding. Either Ctrl, Shift or Alt counts. Releasing the modifier first keeps the action held until its key is released. Composites ignore modifiers, so Ctrl+S still moves backwards.
+- **Mouse deltas** (`MouseMovement`, `MouseWheel`) last until the end of the frame they arrived in. Read them in `onChanged`, or before Heartbeat (RenderStepped, `BindToRenderStep`).
+- **Names are unique** across contexts, because saved bindings use them. `"Default"` is taken by the default context.
+- **Roblox's own controls are separate.** Sinking a key stops Hydrogen actions only. To stop the default character controls while a menu is open, disable them through the PlayerModule.
+- Thumbsticks use a radial dead zone (0.15, rescaled so movement starts smoothly). `Input.configure({ deadzone = 0.2 })` changes it everywhere, and `{ deadzone = ... }` on an axis or vector2 changes it for one action.
+- Listeners run in order of context priority, then definition. A listener that errors is warned about, and one that yields doesn't hold up the others.
+
+#### Testing input
+
+`Input.simulate` produces input the way a device would, and it goes through contexts, sinking and bindings like real input. `Hydrogen.test` calls `Input.reset()` when a test ends.
+
+```luau
+Hydrogen.test({ systems = { Movement } }, function(t)
+	Input.simulate.press(Enum.KeyCode.LeftShift)
+	Input.simulate.move(Enum.KeyCode.Thumbstick1, Vector2.new(0, 1)) -- also switches the device to gamepad
+	t:advance(0.1)
+	-- assert on your system...
+	Input.simulate.release(Enum.KeyCode.LeftShift)
+	Input.simulate.tap(Enum.KeyCode.E)
+	Input.simulate.move(Enum.UserInputType.MouseMovement, Vector2.new(5, 0)) -- gone after t:advance(0)
+	Input.simulate.device("touch")
+end)
+```
+
+`Input.reset()` releases everything, restores every default binding and every context's starting state, sets the device back to `"keyboard"`, and drops listeners and touch buttons. It keeps the definitions, like `State.reset()`. To test touch buttons under Lune, call `Input.configure({ touchParent = Instance.new("Folder") })`: the buttons are made there, though Lune's Instances can't fire their events. Drive `Input.bindButton` with a fake button instead.
+
+#### Why it's designed this way
+
+- **Hydrogen routes input itself, on top of `UserInputService`, instead of building on the Input Action System.** Roblox's `InputContext` / `InputAction` / `InputBinding` instances bring priorities, sinking and touch `UIButton`s, but they don't cover everything this API needs. `InputBinding:Fire` can simulate input inside Roblox, but Lune can't run the engine side at all, so headless tests would have nothing to drive. They have no conflict detection, no saved binding format, and no defined behavior for a key held while its context changes. With them, the code that decides which action fires would only run inside Roblox, so tests would check a stand-in instead. With one router in Luau, the same code runs live and under `Input.simulate`, and every rule above is tested. ContextActionService was ruled out for the same reasons, and because its touch buttons are hard to style. The raw input source sits behind three calls (`press`, `release`, `move`), so a backend for the Input Action System can be added later without changing the API. The cost is that sinking doesn't reach Roblox's default controls (see Rules).
+- **Actions belong to one context, and names are global.** A binding table keyed by action name serializes without ids. A conflict is then always between two named actions the player can see.
+- **Counted `enableFor` / `disableFor` next to plain `enable` / `disable`.** Overlapping UIs that toggle a shared context are the usual source of "controls stuck off" bugs. Counting fixes that, and tying the count to a scope makes it impossible to forget to undo. The plain methods stay simple for games with one menu.
+- **Buttons don't re-press on re-enable, but axes resume.** A jump or a shot fired by closing a menu is a bug. Stopping while you hold W is one too.
+- **Saved bindings are a diff, as plain data.** Saving only what the player changed means fixing a default reaches everyone who didn't rebind it. Names instead of EnumItems fit in a DataStore as they are.
+- **Touch buttons are made on first touch.** Keyboard and gamepad players never pay for them. The default grid is one line of code, `touchButton()` gives access to the made button, and `bindButton` / `source` give full control.
+- **No per-frame work when idle.** Keys are routed when they change, through a per-key cache cleared on context or binding changes. The only frame callback runs while the mouse is moving, to clear deltas.
 
 ---
 
