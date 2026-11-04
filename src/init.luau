@@ -8,6 +8,8 @@ local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
+local Signal = require("@self/Signal")
+local Scheduler = require("@self/Scheduler")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -65,6 +67,12 @@ export type Marketplace = Receipts.Marketplace
 export type MemoryReceiptStore = Receipts.MemoryStore
 export type FakeMarketplace = Receipts.FakeMarketplace
 
+export type Signal<T...> = Signal.Signal<T...>
+export type Connection = Signal.Connection
+export type Timer = Scheduler.Timer
+export type EveryOptions = Scheduler.EveryOptions
+export type FixedOptions = Scheduler.FixedOptions
+
 return {
 	App = App,
 	define = Definition.define,
@@ -98,4 +106,8 @@ return {
 	State = State,
 	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
 	Receipts = Receipts,
+	-- Typed in-process signals: Signal.new(), Connect, Once, Wait, Fire.
+	Signal = Signal,
+	-- Timers tied to lifetimes: after, every, fixed (game loop), debounce, throttle.
+	Scheduler = Scheduler,
 }

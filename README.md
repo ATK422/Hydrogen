@@ -73,9 +73,11 @@ Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Da
 Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
 Hydrogen.Receipts       -- kit: routes ProcessReceipt and grants each purchase once; add it to the app
+Hydrogen.Signal         -- typed in-process signals: Signal.new(), Connect, Once, Wait, Fire
+Hydrogen.Scheduler      -- timers tied to lifetimes: after, every, fixed (game loop), debounce, throttle
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. Signal adds `Hydrogen.Signal<T...>` and `Hydrogen.Connection`; Scheduler adds `Hydrogen.Timer`, `Hydrogen.EveryOptions` and `Hydrogen.FixedOptions`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -235,6 +237,116 @@ What can't be automatic: Luau has no hook into `RBXScriptSignal:Connect`, `task.
 - **Closed scopes clean instead of erroring.** The usual cleanup bug is async work finishing after its player left. Cleaning what it adds makes that safe without a check at every step.
 - **Destroy is final, so there's no reuse.** A stale reference to last round's scope can't leak into this round. Make a `child()` per round instead.
 - Tasks are kept in a table keyed by the task with an insertion counter, so `add`, `remove` and finished threads forgetting themselves are O(1), and `destroy` sorts once.
+
+### Signals
+
+`Hydrogen.Signal` lets a system broadcast something that happened ("a player died", "the round ended") without knowing who listens. It works within one side, server or client. To cross the network, use a `serverEvent` or `clientEvent`.
+
+```luau
+-- ReplicatedStorage/Shared/Events.luau
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+
+-- The annotation is what types Fire, Connect and Wait.
+local PlayerDied: Hydrogen.Signal<Player, Player?> = Hydrogen.Signal.new("PlayerDied") -- victim, killer
+
+return {
+	PlayerDied = PlayerDied,
+}
+```
+
+```luau
+-- In a system
+function Quests:start()
+	Scope.of(self):add(Events.PlayerDied:Connect(function(victim: Player, killer: Player?)
+		if killer then
+			progress(killer, "kills", 1)
+		end
+	end))
+end
+
+-- Elsewhere
+Events.PlayerDied:Fire(victim, killer)
+```
+
+| Method | Does |
+| --- | --- |
+| `Signal.new<T...>(name?)` | A new signal. Annotate it (`Hydrogen.Signal<Player, number>`) so firing and listening are type-checked. `name` appears in error warnings. |
+| `signal:Connect(fn)` | Calls `fn(...)` on every `Fire`, in connection order. Returns a `Connection` (`:Disconnect()`, `.Connected`), which `scope:add` cleans. |
+| `signal:Once(fn)` | Like `Connect`, but disconnects before the first call. |
+| `signal:Wait()` | Yields until the next `Fire` and returns its arguments. |
+| `signal:Fire(...)` | Runs every listener now. |
+| `signal:FireDeferred(...)` | `Fire`, after the current thread yields (`task.defer`). |
+| `signal:DisconnectAll()`, `signal:Destroy()` | Disconnect everyone. After `Destroy`, `Connect` returns a disconnected connection and `Fire` does nothing. |
+
+Rules:
+
+- **`Fire` is immediate.** When it returns, every listener has run or reached its first yield.
+- **A listener that yields doesn't hold anything up.** The other listeners and the code that fired carry on, and the yielded listener resumes on its own.
+- **An error in a listener** is warned as `[HYDROGEN] Listener of signal <name> failed: <error and traceback>`, and the other listeners still run. `Fire` never throws a listener's error.
+- **Connecting or disconnecting during a `Fire`:** a listener connected during a `Fire` first hears the next one, and a listener disconnected during a `Fire` (by an earlier listener, or by itself) isn't called again, even by that `Fire`.
+- A `Fire` from inside a listener runs all listeners before the outer `Fire` continues.
+- Disconnecting drops the signal's reference to your function, so nothing leaks, even if you keep the connection around.
+
+#### Why it's designed this way
+
+- **Immediate by default.** A listener sees the world exactly as it was when `Fire` was called, the stack trace includes the code that fired, and tests can `Fire` and assert on the next line with no frame to wait for. Deferred dispatch protects against re-entrancy, but listeners then see tables the firer may already have changed. `FireDeferred` is there when you want it.
+- **One thread per `Fire`, not one per listener.** Listeners run one after another on a reused thread. If one yields, that thread stays with it and the rest continue on another, so a yield still never blocks the others. In Roblox Studio, one `Fire` costs about 0.9 µs with 1 listener, 1.9 µs with 5 and 3.6 µs with 20. A `BindableEvent` costs 2.3 µs and 5.4 µs with 1 and 5, a GoodSignal-style signal (a thread per listener) 4.8 µs and 15 µs with 5 and 20, and a plain table of callbacks 0.05 µs per listener, with no yield or error safety (`bench/Signal.luau`).
+- **Connection order, copy on write.** Listeners live in an array. Changing it during a `Fire` swaps in a new array, so the `Fire` in progress walks the list it started with. A `Fire` with no changes copies nothing.
+- **Errors are warned, not thrown.** One broken listener shouldn't break the system that fired, or the other listeners. Warnings go through Hydrogen's log, so `Hydrogen.test` captures them (`t:expectWarning`).
+
+### Timers with `Hydrogen.Scheduler`
+
+`Hydrogen.Scheduler` runs code later or repeatedly, and every timer it returns can be bound to a lifetime:
+
+```luau
+local Scheduler = Hydrogen.Scheduler
+
+function Regen:start()
+	-- Cancelled on app:stop().
+	Scheduler.every(1, function()
+		regenerateEveryone()
+	end):bind(self)
+
+	-- A 20 Hz game loop.
+	Scheduler.fixed(1 / 20, function(dt: number)
+		stepProjectiles(dt)
+	end):bind(self)
+end
+
+function Regen:playerAdded(player: Player)
+	-- Cancelled when this player leaves.
+	Scheduler.after(30, function()
+		giveStarterBonus(player)
+	end):bind(self, player)
+end
+```
+
+| Function | Does |
+| --- | --- |
+| `Scheduler.after(seconds, fn)` | Runs `fn()` once after `seconds`. |
+| `Scheduler.every(seconds, fn, { jitter? })` | Runs `fn(elapsed)` every `seconds`, first after one interval. `jitter` adds a random 0 to `jitter` seconds to each interval. |
+| `Scheduler.fixed(seconds, fn, { maxSteps? })` | A fixed-timestep loop: `fn(seconds)` runs once per step of exactly `seconds`. After a hitch it runs the missed steps back to back, up to `maxSteps` (default 5), and drops the rest. |
+| `Scheduler.debounce(seconds, fn)` | Returns `call, cancel`. `call(...)` runs `fn` once `seconds` have passed without another call, with the last arguments. |
+| `Scheduler.throttle(seconds, fn)` | Returns `call, cancel`. `call(...)` runs `fn` at once, at most once per `seconds`. Calls in between become one run at the end of the window, with the last arguments. |
+| `Scheduler.count()` | Timers waiting to run, so a test can check nothing leaked. |
+
+A `Timer` has `:cancel()`, `:pause()`, `:resume()` (it continues with the time that was left), `.active` and `.paused`. `timer:bind(scope)` cancels it with any `Hydrogen.Scope`, and `timer:bind(system, player?)` with `Scope.of(system, player)`. `scope:add(timer)` works too. Add debounce's and throttle's `cancel` to a scope the same way.
+
+Rules:
+
+- **Everything runs on `Hydrogen.Clock`**, so `t:advance` in `Hydrogen.test` drives timers deterministically. `t:advance(300)` runs a 60-second `every` five times, and each run sees `Clock.now()` at its own due time.
+- **Errors:** a callback that errors is warned as `[HYDROGEN] Scheduler: every(1) callback failed: <error and traceback>`, and the timer keeps running.
+- **Yields:** a callback that yields doesn't hold up other timers. A repeating timer whose last run is still yielded skips its runs until that run returns, so runs never pile up or overlap, and you get one warning per timer. Put slow work in `task.spawn` if every run must happen.
+- **Running late:** `every` keeps its phase through small delays. If a whole interval was missed, it runs once and starts over from then, with no burst. `fixed` catches up as described above. During a catch-up each step sees the same `Clock.now()`.
+- **Ordering:** timers run in due-time order. Ties run in the order they were created, interleaved correctly with `Clock.delay`. A timer created inside a callback with a due time of now runs right after, not in the same pass.
+- Timers left on a test's fake clock are dropped when the clock is restored, as the fake clock drops its own waiting threads.
+
+#### Why it's designed this way
+
+- **One heap and one waiting thread.** All timers live in a min-heap ordered by due time, and a single `Clock.delay` waits for the earliest one. A thousand timers cost one waiting thread. With no timers nothing waits at all, and nothing ever runs per frame. A Heartbeat-driven wheel would check the timers every frame even when the next is minutes away. Under the fake clock it would also run each timer at the end of an `advance` rather than at its own time.
+- **Callbacks run on a reused thread,** like signal listeners, so a firing creates no thread unless the callback yields.
+- **Skipping instead of overlapping:** a game loop that runs twice at once, or queues 30 runs behind a yield, is the classic timer bug. Skipping, with a warning, makes that bug visible instead.
+- **`bind`** is the one-word way to tie a timer to the lifetime it belongs to. Leaking a repeating timer past its player is the most common timer bug.
 
 ### Network definitions
 
@@ -1271,6 +1383,10 @@ src/
     FakeMarketplace.luau  stand-in MarketplaceService for tests
     Types.luau         Receipt, ReceiptStore, Marketplace, options
     Clock.luau  Log.luau  time sources and warnings, forwarding to Hydrogen.Clock and the log; tests can patch them
+  Signal/
+    init.luau          Signal: typed in-process signals, listeners on a reused runner thread
+  Scheduler/
+    init.luau          Scheduler: after, every, fixed, debounce, throttle on one min-heap and one Clock.delay
   Testing/
     init.luau          Hydrogen.test and Hydrogen.harness
     Expect.luau        expectations on deliveries, argument matching, failure messages
@@ -1283,7 +1399,9 @@ test/
   Data.luau  PlayerState.luau
   State.luau           Hydrogen.State end to end through loopback
   Receipts.luau        Hydrogen.Receipts with a fake marketplace, memory store and Data store
+  Signal.luau  Scheduler.luau
   Fixtures/            modules the suites require
+bench/                 micro-benchmarks, not run by the suite (lune run bench/Signal)
 docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them
 default.project.json   Rojo project for development (see below)
 pesde.toml             package manifest, scripts, dependencies, version
