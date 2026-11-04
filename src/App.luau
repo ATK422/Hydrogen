@@ -88,26 +88,15 @@ local function collectSystems(container: Instance): { System }
 	return systems
 end
 
--- A hook that declares a parameter after its usual ones (`function S:start(scope)`,
--- `function S:playerAdded(player, scope)`) is given a scope. Other hooks never create one.
-local function wantsScope(callback: any, usual: number): boolean
-	if type(callback) ~= "function" then
-		return false
-	end
-	local params, variadic = debug.info(callback, "a")
-	return variadic or params > usual
-end
-
 -- Fails fast like a plain call, but names the system. Returns how long the hook took.
-local function boot(app: typeof(App), system: System, hook: "init" | "start"): number
+local function boot(system: System, hook: "init" | "start"): number
 	local callback = (system :: any)[hook]
 	if not callback then
 		return 0
 	end
 
-	local scope = if wantsScope(callback, 1) then app:_systemScope(system) else nil
 	local began = os.clock()
-	local ok, err = xpcall(callback, debug.traceback, system, scope)
+	local ok, err = xpcall(callback, debug.traceback, system)
 	if not ok then
 		error(`[HYDROGEN] System {Definition.describe(system)} failed in {hook}: {err}`, 0)
 	end
@@ -119,20 +108,13 @@ local function milliseconds(seconds: number): string
 end
 
 -- One system failing must not stop the rest; Data still has to save when another system errors.
-local function runHook(app: typeof(App), system: System, hook: "playerAdded" | "playerRemoving" | "stop", player: Player?)
+local function runHook(system: System, hook: "playerAdded" | "playerRemoving" | "stop", ...: any)
 	local callback = (system :: any)[hook]
 	if not callback then
 		return
 	end
 
-	local ok, err
-	if player then
-		local scope = if wantsScope(callback, 2) then app:_playerScope(system, player) else nil
-		ok, err = xpcall(callback, debug.traceback, system, player, scope)
-	else
-		local scope = if wantsScope(callback, 1) then app:_systemScope(system) else nil
-		ok, err = xpcall(callback, debug.traceback, system, scope)
-	end
+	local ok, err = xpcall(callback, debug.traceback, system, ...)
 	if not ok then
 		warn(`[HYDROGEN] {hook} failed in system {Definition.describe(system)}: {err}`)
 	end
@@ -162,14 +144,14 @@ function App:addSystem(system: System)
 
 	if self._started then
 		Scope._own(system, self._owner :: any)
-		boot(self, system, "init")
-		boot(self, system, "start")
+		boot(system, "init")
+		boot(system, "start")
 
 		-- Players still being added reach this system through the loop in _addPlayer.
 		table.insert(self._ordered, system)
 		for player, state in self._players do
 			if state.added and not state.removing then
-				task.spawn(runHook, self, system, "playerAdded", player)
+				task.spawn(runHook, system, "playerAdded", player)
 			end
 		end
 	end
@@ -261,7 +243,7 @@ function App:_boot()
 	local began = os.clock()
 
 	for _, system in self._ordered do
-		initTimes[system] = boot(self, system, "init")
+		initTimes[system] = boot(system, "init")
 	end
 
 	-- Listeners register during init; the client then requests any queued events.
@@ -270,7 +252,7 @@ function App:_boot()
 	local networkTime = os.clock() - networkBegan
 
 	for _, system in self._ordered do
-		startTimes[system] = boot(self, system, "start")
+		startTimes[system] = boot(system, "start")
 	end
 
 	if self._debug then
@@ -336,7 +318,7 @@ function App:stop()
 
 	for index = #self._ordered, 1, -1 do
 		local system = self._ordered[index]
-		runHook(self, system, "stop")
+		runHook(system, "stop")
 		self:_closeSystemScope(system)
 	end
 
@@ -454,7 +436,7 @@ function App:_addPlayer(player: Player)
 	-- Indexed so systems added while a hook yields are still reached.
 	local index = 1
 	while self._ordered[index] do
-		runHook(self, self._ordered[index], "playerAdded", player)
+		runHook(self._ordered[index], "playerAdded", player)
 		index += 1
 	end
 
@@ -479,7 +461,7 @@ function App:_removePlayer(player: Player)
 	for index = #self._ordered, 1, -1 do
 		local system = self._ordered[index]
 		state.removingAt = index
-		runHook(self, system, "playerRemoving", player)
+		runHook(system, "playerRemoving", player)
 
 		local scope = state.scopes and state.scopes[system]
 		if scope then

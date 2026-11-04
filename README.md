@@ -148,23 +148,26 @@ Hydrogen calls them in dependency order, so you don't depend on the order Roblox
 - A hook that errors is reported with `[HYDROGEN] <hook> failed in system <full name>` and the remaining systems still run, so one broken system can't stop `Data` from saving.
 - A system added after `app:start()` gets `playerAdded` for players already in the game.
 - The player hooks run on the client too (for every player, including the local one). `stop` is only bound on the server; on the client you can call `app:stop()` yourself.
-- Any hook can take a trailing `scope` parameter to get cleanup tied to the system or the player. See [Scopes](#scopes).
+- For cleanup tied to the system or to a player, ask for a scope with `Hydrogen.Scope.of`. See [Scopes](#scopes).
 
 ### Scopes
 
-A scope collects what has to be undone (connections, threads, Instances, cleanup functions) and undoes it all when its lifetime ends. Every system has one that lasts until `app:stop()`, and one per player that lasts until that player leaves. Declare the parameter and the hook receives it:
+A scope collects what has to be undone (connections, threads, Instances, cleanup functions) and undoes it all when its lifetime ends. Every system has one that lasts until `app:stop()`, and one per player that lasts until that player leaves. Ask for them with `Hydrogen.Scope.of`:
 
 ```luau
+local Scope = Hydrogen.Scope
+
 return Hydrogen.define(function(use)
 	local Combat = {}
 
-	function Combat:start(scope: Hydrogen.Scope)
+	function Combat:start()
 		-- Destroyed on app:stop(), right after Combat's stop hook.
-		scope:connect(RunService.Heartbeat, stepProjectiles)
+		Scope.of(self):connect(RunService.Heartbeat, stepProjectiles)
 	end
 
-	function Combat:playerAdded(player: Player, scope: Hydrogen.Scope)
+	function Combat:playerAdded(player: Player)
 		-- Destroyed when the player leaves, right after Combat's playerRemoving for them.
+		local scope = Scope.of(self, player)
 		local arena = scope:add(ArenaTemplate:Clone())
 		arena.Parent = workspace.Arenas
 		scope:connect(player.CharacterAdded, onCharacter)
@@ -180,7 +183,7 @@ return Hydrogen.define(function(use)
 end)
 ```
 
-`init`, `start` and `stop` get the system's scope; `playerAdded` and `playerRemoving` get the system's scope for that player. Outside a hook (a remote handler, a callback, another system), `Hydrogen.Scope.of(Combat)` and `Hydrogen.Scope.of(Combat, player)` return the same scopes. `Hydrogen.Scope.new(name?)` makes one you destroy yourself.
+`Scope.of(system)` is the system's scope and `Scope.of(system, player)` its scope for that player. Each is created the first time it's asked for, and every later call returns the same one, so it works the same from a hook, a remote handler, a callback or another system (`Scope.of(Combat, player)`). `Hydrogen.Scope.new(name?)` makes one you destroy yourself.
 
 | Method | Does |
 | --- | --- |
@@ -203,15 +206,15 @@ Rules:
 - A player scope is open from the player's first `playerAdded` hook until the system's `playerRemoving` for them returns, so it is destroyed in reverse dependency order: a system's scope for a player is gone before the systems it `use`s run their `playerRemoving`. If the player leaves while `playerAdded` is still running, cleanup waits for it like `playerRemoving` does.
 - A system scope is open from `init` until `app:stop()`, and is destroyed right after the system's `stop` hook. A boot that errors destroys the system scopes too.
 - `Scope.of` after a lifetime ended returns a destroyed scope. It errors for a system that no started app runs, and for a player the app hasn't added yet.
-- Under `app:replace`, the fake's hooks get the original's scopes, and `Scope.of(original)` is `Scope.of(fake)`.
+- Under `app:replace`, `Scope.of(original)` and `Scope.of(fake)` are the same scope, so the fake and the systems that `use` the original agree.
 - Adding the same task twice tracks it once. A thread that destroys its own scope isn't cancelled; it finishes what it's doing.
-- A system that never declares the parameter or calls `Scope.of` creates no scope, and its hooks are called exactly as before.
+- A system that never calls `Scope.of` creates no scope. Hooks are called exactly as before; Hydrogen never passes a scope in.
 
 What can't be automatic: Luau has no hook into `RBXScriptSignal:Connect`, `task.spawn` or `Instance.new`, so a scope only knows what goes through it. Use `scope:connect`, `scope:spawn`, `scope:delay` and `scope:add` where you would have called those directly.
 
 #### Why scopes work this way
 
-- **A parameter you declare, not one always passed.** Hydrogen reads each hook's parameter count (`debug.info`) and only builds a scope for hooks that ask, so every other system pays nothing. Passing one to every hook would create a scope per player per system whether used or not.
+- **You ask for a scope; hooks aren't handed one.** Getting a scope is always one visible call, `Scope.of`, and hook signatures stay what they were. Scopes are created on first use, so a system that never asks pays nothing.
 - **`Scope.of(system, player)`, not an ambient "current scope".** A current scope tracked per thread would be lost in every connection callback and `task.spawn`, which is exactly where most cleanup is created. `Scope.of` works from any thread.
 - **Network listeners aren't tracked behind your back.** A listener registered in `playerAdded` usually serves every player (handlers receive the player), so disconnecting it when the first player leaves would be a bug you'd have to fight. `scope:add(event:On(...))` says what you mean and keeps the callback typed.
 - **Closed scopes clean instead of erroring.** The usual cleanup bug is async work finishing after its player left. Cleaning what it adds makes that safe without a check at every step.

@@ -323,26 +323,28 @@ return function()
 			return nil
 		end)
 
-		test.case("hooks that declare a scope get one; the rest create none", function()
+		test.case("Scope.of returns the same scopes from every hook, and only when asked", function()
 			local seen = {}
 			local Combat = Hydrogen.define("Combat", function()
 				local Combat = {}
 
-				function Combat:init(scope: Hydrogen.Scope)
-					seen.init = scope
+				function Combat:init(...)
+					seen.initArgs = select("#", ...)
+					seen.init = Scope.of(self)
 				end
 
-				function Combat:start(scope: Hydrogen.Scope)
-					seen.start = scope
+				function Combat:start()
+					seen.start = Scope.of(self)
 				end
 
-				function Combat:playerAdded(player: Player, scope: Hydrogen.Scope)
-					seen.added = scope
+				function Combat:playerAdded(player: Player, ...)
+					seen.addedArgs = select("#", ...)
+					seen.added = Scope.of(self, player)
 				end
 
-				function Combat:playerRemoving(player: Player, scope: Hydrogen.Scope)
-					seen.removing = scope
-					seen.aliveInRemoving = scope.alive
+				function Combat:playerRemoving(player: Player)
+					seen.removing = Scope.of(self, player)
+					seen.aliveInRemoving = seen.removing.alive
 				end
 
 				return Combat
@@ -362,6 +364,9 @@ return function()
 			local player = { Name = "P" } :: any
 			app:_addPlayer(player)
 
+			-- Hooks are called exactly as before: no extra arguments.
+			check.equal(seen.initArgs, 0)
+			check.equal(seen.addedArgs, 0)
 			check.equal(seen.init, seen.start)
 			check.equal(seen.init, Scope.of(Combat))
 			check.equal(seen.added, Scope.of(Combat, player))
@@ -389,8 +394,8 @@ return function()
 
 			local Data = Hydrogen.define("Data", function()
 				local Data = {}
-				function Data:playerAdded(player: Player, scope: Hydrogen.Scope)
-					scope:add(function()
+				function Data:playerAdded(player: Player)
+					Scope.of(self, player):add(function()
 						table.insert(events, "Data scope")
 					end)
 				end
@@ -403,8 +408,8 @@ return function()
 			local Shop = Hydrogen.define("Shop", function(use)
 				use(Data)
 				local Shop = {}
-				function Shop:playerAdded(player: Player, scope: Hydrogen.Scope)
-					scope:add(function()
+				function Shop:playerAdded(player: Player)
+					Scope.of(self, player):add(function()
 						table.insert(events, "Shop scope")
 					end)
 				end
@@ -438,8 +443,8 @@ return function()
 
 			local Data = Hydrogen.define("Data", function()
 				local Data = {}
-				function Data:start(scope: Hydrogen.Scope)
-					scope:add(function()
+				function Data:start()
+					Scope.of(self):add(function()
 						table.insert(events, "Data scope")
 					end)
 				end
@@ -453,7 +458,7 @@ return function()
 				use(Data)
 				local Shop = {}
 				function Shop:start()
-					-- Scope.of works without declaring the parameter.
+					-- Any system's scope can be reached through its table, not only self.
 					Scope.of(Shop):add(function()
 						table.insert(events, "Shop scope")
 					end)
@@ -488,8 +493,8 @@ return function()
 			local cleaned = {}
 			local Lobby = Hydrogen.define("Lobby", function()
 				local Lobby = {}
-				function Lobby:playerAdded(player: Player, scope: Hydrogen.Scope)
-					scope:add(function()
+				function Lobby:playerAdded(player: Player)
+					Scope.of(self, player):add(function()
 						table.insert(cleaned, player.Name)
 					end)
 				end
@@ -513,7 +518,8 @@ return function()
 
 			local Data = Hydrogen.define("Data", function()
 				local Data = {}
-				function Data:playerAdded(player: Player, scope: Hydrogen.Scope)
+				function Data:playerAdded(player: Player)
+					local scope = Scope.of(self, player)
 					-- Still running when the player leaves, and finishes after cleanup.
 					scope:spawn(function()
 						task.wait(0.05)
@@ -567,8 +573,8 @@ return function()
 			local Broken = Hydrogen.define("Broken", function(use)
 				use(Data)
 				local Broken = {}
-				function Broken:playerAdded(player: Player, scope: Hydrogen.Scope)
-					scope:add(function()
+				function Broken:playerAdded(player: Player)
+					Scope.of(self, player):add(function()
 						error("cleanup boom")
 					end)
 				end
@@ -612,8 +618,8 @@ return function()
 			local cleaned = false
 			local Opens = Hydrogen.define("Opens", function()
 				local Opens = {}
-				function Opens:init(scope: Hydrogen.Scope)
-					scope:add(function()
+				function Opens:init()
+					Scope.of(self):add(function()
 						cleaned = true
 					end)
 				end
@@ -648,11 +654,11 @@ return function()
 
 			local fakeScopes = {}
 			local fake = {
-				start = function(_, scope: Hydrogen.Scope)
-					fakeScopes.system = scope
+				start = function(self)
+					fakeScopes.system = Scope.of(self)
 				end,
-				playerAdded = function(_, player: Player, scope: Hydrogen.Scope)
-					fakeScopes.player = scope
+				playerAdded = function(self, player: Player)
+					fakeScopes.player = Scope.of(self, player)
 				end,
 			}
 
@@ -680,8 +686,8 @@ return function()
 
 			local Pings = Hydrogen.define("Pings", function()
 				local Pings = {}
-				function Pings:playerAdded(player: Player, scope: Hydrogen.Scope)
-					scope:add(Ping:On(function(from, text)
+				function Pings:playerAdded(player: Player)
+					Scope.of(self, player):add(Ping:On(function(from, text)
 						if from == player then
 							table.insert(heard, text)
 						end

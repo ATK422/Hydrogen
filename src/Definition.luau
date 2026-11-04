@@ -1,7 +1,5 @@
 --!strict
 
-local Scope = require("./Scope")
-
 type function WithoutLifecycle(t: type)
 	if t:is("union") or t:is("intersection") then
 		local parts = {}
@@ -35,14 +33,13 @@ type function WithoutLifecycle(t: type)
 	return result
 end
 
--- A hook that declares the trailing scope parameter is given the system's scope, or its scope for the player.
 export type Lifecycle = {
 	read id: string,
-	read init: ((any, Scope.Scope) -> ())?,
-	read start: ((any, Scope.Scope) -> ())?,
-	read playerAdded: ((any, Player, Scope.Scope) -> ())?,
-	read playerRemoving: ((any, Player, Scope.Scope) -> ())?,
-	read stop: ((any, Scope.Scope) -> ())?,
+	read init: ((any) -> ())?,
+	read start: ((any) -> ())?,
+	read playerAdded: ((any, Player) -> ())?,
+	read playerRemoving: ((any, Player) -> ())?,
+	read stop: ((any) -> ())?,
 }
 
 export type System<T> = WithoutLifecycle<T>
