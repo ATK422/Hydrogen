@@ -35,6 +35,7 @@ local defs: {
 	Quests: Hydrogen.PlayerList<string>,
 	Packed: Hydrogen.StateMap<string, number>,
 	Wallet: Hydrogen.StateValue<Money>,
+	Team: Hydrogen.PlayerValue<string?>,
 } = nil :: any
 
 local function define()
@@ -50,6 +51,7 @@ local function define()
 		Inventory = State.playerMap("Inventory", gt.string(), gt.number()),
 		Feed = State.list("Feed", gt.string()),
 		Quests = State.playerList("Quests", gt.string(), { visibleTo = "everyone" }),
+		Team = State.playerValue("Team", gt.optional(gt.string()), nil, { visibleTo = "everyone" }),
 		Packed = State.map("Packed", gt.string(), gt.number({ integer = true, range = "[0, 255]" }), { encode = true }),
 		Wallet = State.value("Wallet", gt.any(), money(0), {
 			serializer = {
@@ -481,6 +483,22 @@ return function()
 
 			check.equal(net:as(bob, Feed.size, Feed), 2)
 			check.equal(net:as(players[1], Feed.size, Feed), 2)
+			return nil
+		end)
+
+		test.case("an optional value can be set back to nil", function()
+			local net, players = start("Alice", "Bob")
+			local alice, bob = players[1], players[2]
+			local Team = defs.Team
+
+			Team:set(alice, "Red")
+			State.flush()
+			check.equal(net:as(bob, Team.get, Team, alice), "Red")
+
+			Team:set(alice, nil)
+			State.flush()
+			check.equal(net:as(bob, Team.get, Team, alice), nil)
+			check.equal(Team:get(alice), nil)
 			return nil
 		end)
 
