@@ -2,7 +2,7 @@
 
 A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you four things:
 
-- **Systems**: modules with `init` / `start`, player (`playerAdded` / `playerRemoving`) and shutdown (`stop`) hooks that run in dependency order.
+- **Systems**: modules with `init` / `start`, player (`playerAdded` / `playerRemoving`), character (`characterAdded` / `characterRemoving`) and shutdown (`stop`) hooks that run in dependency order.
 - **App**: collects your systems (and network definitions) and boots them.
 - **Network**: typed, schema-checked remote events and functions. Nothing fired during startup is lost, because events are queued until the network and each client are ready. Middleware inspects or transforms traffic, and a logger and a rate limiter are built in. Events can be unreliable, and batching and buffer encoding are there when traffic gets heavy.
 - **Testing**: `Hydrogen.test` runs your systems with fakes, fake players and a fake clock in one call, checks what was fired with expectations, and always cleans up. It runs in Studio and under Lune, with any test framework. Underneath, `app:replace` swaps a system for a fake and `Hydrogen.loopback` runs server and client systems together in one VM.
@@ -73,6 +73,7 @@ Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Da
 Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
 Hydrogen.Receipts       -- kit: routes ProcessReceipt and grants each purchase once; add it to the app
+Hydrogen.Character      -- test helpers for fake characters; the characterAdded / characterRemoving hooks need nothing
 ```
 
 Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`.
@@ -130,7 +131,7 @@ Rules worth knowing:
 - **Or pass the id yourself:** `Hydrogen.define("Data", function(use) ... end)`. Do this whenever `define` is called through a wrapper function, because the inferred id would be the wrapper's module. An explicit id is also what messages show.
 - Every hook is optional and called with `:` (it receives the system as `self`).
 - `use(other)` must be called synchronously inside the constructor. It records the dependency and returns `other` (typed without its lifecycle fields, so you can't call `init`/`start` on it by accident).
-- Dependencies must also be added to the same app, otherwise Hydrogen warns `System X depends on system Y which was not added to the app`.
+- **A system you `use` is added to the app for you** if you didn't add it, and boots before the systems that use it, at `app:start()` or when a system added later needs it. With `debug = true` the app prints `[HYDROGEN] Added <Y>: <X> uses it`. The one exception is a system replaced with `app:replace`: the fake stands in for it, so its own dependencies aren't added (you get `System X depends on system Y which was not added to the app` if nothing else adds them).
 - Circular `use` chains error at `app:start()` with the cycle printed: `Cyclic system dependency: A -> B -> A`.
 - An error in `init` or `start` still stops the boot, but is reported as `[HYDROGEN] System <full name> failed in start: <error and traceback>`.
 - Systems with no dependency relationship start in the order they were added.
@@ -157,13 +158,69 @@ Hydrogen calls them in dependency order, so you don't depend on the order Roblox
 
 - `playerAdded` runs on each system in dependency order (dependencies first), for players already in the game when `app:start()` finishes and for everyone who joins later.
 - `playerRemoving` runs in **reverse** dependency order. A system that `use`s `Data` gets its `playerRemoving` before `Data` saves, so it can still record a forfeit or a last score.
-- `stop` runs in reverse dependency order on shutdown. On the server, `app:start()` binds `app:stop()` to `game:BindToClose`. `stop` first runs `playerRemoving` for every player still in the game, waits until every `playerRemoving` hook has returned, then calls the `stop` hooks.
+- `stop` runs in reverse dependency order on shutdown. On the server, `app:start()` binds `app:stop()` to `game:BindToClose`. `stop` first runs `characterRemoving` and `playerRemoving` for every player still in the game, waits until every one of those hooks has returned, then calls the `stop` hooks.
 - The hooks for one player run one after another in a single thread, so a hook that yields (a DataStore call) delays the next system's hook for that player. Different players don't wait for each other.
 - If a player leaves while their `playerAdded` hooks are still running, `playerRemoving` waits for them to finish. Every system sees `playerAdded` before `playerRemoving` for the same player, and each exactly once.
 - A hook that errors is reported with `[HYDROGEN] <hook> failed in system <full name>` and the remaining systems still run, so one broken system can't stop `Data` from saving.
 - A system added after `app:start()` gets `playerAdded` for players already in the game.
 - The player hooks run on the client too (for every player, including the local one). `stop` is only bound on the server; on the client you can call `app:stop()` yourself.
 - For cleanup tied to the system or to a player, ask for a scope with `Hydrogen.Scope.of`. See [Scopes](#scopes).
+- For characters, define `characterAdded` / `characterRemoving`. See [Character hooks](#character-hooks).
+
+### Character hooks
+
+Systems can define `characterAdded` and `characterRemoving` to set up and tear down things on each character:
+
+```luau
+local Scope = Hydrogen.Scope
+
+return Hydrogen.define(function(use)
+	local PlayerData = use(PlayerDataStore) -- loaded before our characterAdded runs
+
+	local Combat = {}
+
+	function Combat:characterAdded(player: Player, character: Model)
+		-- Destroyed right after Combat's characterRemoving for this character.
+		local scope = Scope.of(self, character)
+		local humanoid = character:WaitForChild("Humanoid") :: Humanoid
+		humanoid.MaxHealth = 100 + PlayerData:get(player).level * 10
+		scope:connect(humanoid.Died, function()
+			PlayerData:update(player, function(data)
+				data.deaths += 1
+				return nil
+			end)
+		end)
+	end
+
+	function Combat:characterRemoving(player: Player, character: Model)
+		-- respawn, LoadCharacter, destroyed, streamed out, or the player is leaving
+	end
+
+	return Combat
+end)
+```
+
+They follow the same rules as the player hooks:
+
+- `characterAdded` runs on each system in dependency order, for the character a player already has and for every respawn or `LoadCharacter`. It waits until that player's `playerAdded` hooks have all returned, so data a system `use`s is loaded.
+- `characterRemoving` runs in **reverse** dependency order: on `CharacterRemoving`, when the character leaves the DataModel without it (destroyed, or streamed out on a client), and before any `playerRemoving` when the player leaves or the app stops. It waits for that character's `characterAdded` hooks to finish.
+- For one player, everything runs in order in one thread: `playerAdded`, then each character's `characterAdded` and `characterRemoving` (the next character's `characterAdded` waits for the previous `characterRemoving`), then `playerRemoving`. Different players don't wait for each other.
+- A character that's gone before its first hook could run (the player respawned while their data was still loading) gets no hooks at all.
+- A hook that errors is warned (`[HYDROGEN] characterAdded failed in system <name>`) and the other systems still run.
+- `Scope.of(self, character)` is the system's scope for that character, destroyed right after its `characterRemoving`. It's separate from the player scope.
+- They run in client apps too, for every player's character. Other players' characters can arrive well after the player, and their parts may stream in later: use `WaitForChild`. With streaming, a character that streams out counts as removed and gets `characterAdded` again when it streams back in.
+- `characterRemoving` isn't death; connect `humanoid.Died` in `characterAdded`.
+- An app whose systems define neither hook connects nothing for characters.
+
+In tests, fake players get characters with `t:spawnCharacter(player)`; see [Testing your systems](#testing-your-systems). Agents: [docs/ai/character.md](docs/ai/character.md).
+
+#### Why it's designed this way
+
+- **Hooks, not a signal to connect.** `player.CharacterAdded:Connect` in `playerAdded` misses the character that already exists, runs before your data is loaded, has no order between systems, and leaves you to disconnect. A hook fixes all four, and it reads like `playerAdded`.
+- **A character is a child of its player.** That one rule gives the ordering people expect: character hooks start after the player's data is loaded and finish before it saves.
+- **One thread per player.** Running a player's character hooks one after another means `characterRemoving` for the old character can't run after `characterAdded` for the new one and wipe its state.
+- **Stream-out is removal.** A streamed-out character keeps its descendants, so a nametag added on the first `characterAdded` would be duplicated on the next. Treating stream-out as removal destroys it with the character scope, and stream-in adds it again.
+- **Built on an extension point.** The App doesn't special-case characters: they are a hook pair registered with `Definition.hooks` (see [Adding a lifecycle hook](#adding-a-lifecycle-hook)), so other kit modules get the same guarantees.
 
 ### Scopes
 
@@ -198,7 +255,7 @@ return Hydrogen.define(function(use)
 end)
 ```
 
-`Scope.of(system)` is the system's scope and `Scope.of(system, player)` its scope for that player. Each is created the first time it's asked for, and every later call returns the same one, so it works the same from a hook, a remote handler, a callback or another system (`Scope.of(Combat, player)`). `Hydrogen.Scope.new(name?)` makes one you destroy yourself.
+`Scope.of(system)` is the system's scope, `Scope.of(system, player)` its scope for that player, and `Scope.of(system, character)` its scope for a character, destroyed right after the system's `characterRemoving` for it (see [Character hooks](#character-hooks)). Each is created the first time it's asked for, and every later call returns the same one, so it works the same from a hook, a remote handler, a callback or another system (`Scope.of(Combat, player)`). `Hydrogen.Scope.new(name?)` makes one you destroy yourself.
 
 | Method | Does |
 | --- | --- |
@@ -847,6 +904,7 @@ The harness `t` has:
 
 - `t:add(...)`, `t:replace(original, fake)` and `t:start()`, for setup with `start = false`. Systems added after the start boot right away.
 - `t:join(name?)`, `t:leave(player)`, `t:as(player, fn, ...)`, `t:player(name)` and `t:players()`, which work as on [the loopback](#client-and-server-in-one-vm-with-hydrogenloopback).
+- `t:spawnCharacter(player, model?)`, `t:removeCharacter(player)` and `t:streamCharacter(player, streamedIn)`, which give a fake player a character (as `LoadCharacter` would), remove it, or stream it out and back in, running the [character hooks](#character-hooks). Without a model, `spawnCharacter` builds one with a `Humanoid` and `HumanoidRootPart`; the harness destroys it at the end. With a bare `Hydrogen.loopback()`, use `Hydrogen.Character.spawnFake`, `removeFake` and `streamFake`.
 - `t:advance(seconds)`, which moves the [fake clock](#time-and-the-fake-clock).
 - the expectations below, and `t:clear()`, which forgets what was delivered so far (e.g. after setup).
 - `t.app`, `t.net` and `t.clock`: the app, the loopback and the fake clock themselves.
@@ -1225,17 +1283,17 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 200 | Passed: 200` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 224 | Passed: 224` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
 ```
 src/
   init.luau            public API and exported types
-  App.luau             App: collects systems, runs init -> Network.init -> start, player and stop hooks
+  App.luau             App: collects systems, runs init -> Network.init -> start, player, character and stop hooks; adds used systems
   Clock.luau           time sources (now, time, wait, delay, cancel, heartbeat) and the fake clock
   Log.luau             warnings go through here so the test harness can capture them
-  Definition.luau      define/use, system ids, dependency graph wiring, replace redirects, lifecycle-stripping type function
+  Definition.luau      define/use, system ids, dependency graph wiring, replace redirects, lifecycle-stripping type function, Definition.hooks
   Graph.luau           generic dependency graph with topological sort and cycle detection
   Network/
     init.luau          exports constructors and Network.init
@@ -1246,6 +1304,9 @@ src/
     ClientEvent.luau   ServerEvent.luau  ClientFunction.luau  ServerFunction.luau
   Scope/
     init.luau          Scope: cleanup tied to lifetimes; Scope.of looks up the scopes App keeps
+  Character/
+    init.luau          characterAdded / characterRemoving, registered with Definition.hooks; Hydrogen.Character test helpers
+    Fake.luau          fake character signals and models for loopback players
   Data/
     init.luau          re-exports Stores and its types
     Stores.luau        Data.player / Data.store systems, backend selection
@@ -1283,6 +1344,7 @@ test/
   Data.luau  PlayerState.luau
   State.luau           Hydrogen.State end to end through loopback
   Receipts.luau        Hydrogen.Receipts with a fake marketplace, memory store and Data store
+  Character.luau       character hooks, the Definition.hooks extension point, and used systems being added
   Fixtures/            modules the suites require
 docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them
 default.project.json   Rojo project for development (see below)
@@ -1312,6 +1374,43 @@ To add a test file: create `test/Thing.luau` that returns a function registering
 - Read time and schedule work through `Clock` (`Clock.now()`, `Clock.delay(...)`, looked up at call time), never `os.clock` / `task.delay` directly, so the fake clock reaches it.
 - Match the indentation of the file you edit (most use tabs; some `Network/*` files use 4 spaces).
 - Public API changes go through `src/init.luau`. Update this README when the API or a network rule changes.
+
+### Adding a lifecycle hook
+
+A module can give systems a new pair of hooks (as `src/Character` does for `characterAdded` / `characterRemoving`) without touching the App. Register the pair once, when the module loads, with `Definition.hooks` (`src/Definition.luau`):
+
+```luau
+local Definition = require("./Definition")
+
+Definition.hooks({
+	name = "round",              -- used in scope names: "Arena for round <subject.Name>"
+	added = "roundStarted",      -- system:roundStarted(...args)
+	removing = "roundEnded",     -- system:roundEnded(...args)
+	-- Optional: once per app that has a system defining either hook. Return cleanup for app:stop().
+	attach = function(feed: Definition.Feed)
+		local connection = Rounds.started:Connect(function(round)
+			feed:add(round, { round })        -- yields while hooks run; returns false if not added
+		end)
+		return function()
+			connection:Disconnect()
+		end
+	end,
+	-- Optional: for each player the app adds, before their playerAdded. Must not yield.
+	-- Return cleanup, run after their playerRemoving.
+	player = function(feed: Definition.Feed, player: Player)
+		return nil
+	end,
+})
+```
+
+The feed is the module's handle on one app:
+
+- `feed:add(subject, args, parent?)` runs `added` on every system in dependency order, in the calling thread, with `args` (a table without holes). With a `parent` (a player, or another subject), it first waits for the parent's added hooks, and the subject is removed before the parent. It returns `false` and runs nothing if the subject is already in, the parent isn't in or is being removed, the app has stopped, or the subject is removed before its first hook runs.
+- `feed:remove(subject)` runs `removing` in reverse dependency order after the added hooks finished, destroying each system's `Scope.of(system, subject)` right after its hook, and yields until the subject is fully removed (also when another thread is removing it). Unknown subjects are ignored.
+- `feed:has(subject)` is true while the subject is in and not being removed.
+- `feed:scope(system, subject)` is the system's scope for the subject under this pair. `Scope.of(system, subject)` gives the same scope, except that it looks for a player first and then each pair in the order they attached; one Instance can be a subject of several pairs (a tagged character) with separate lifetimes, so a module whose subjects may overlap should hand out `feed:scope`.
+
+Errors in hooks are warned and the other systems still run. Systems added after start get `added` for subjects already in. An app none of whose systems define either hook never calls `attach` or `player`, so the pair costs nothing. Also add the hook names to `Lifecycle` and to the `WithoutLifecycle` type function in `src/Definition.luau`, so systems type-check and `use` strips them, and require the module from `src/init.luau` (or `src/App.luau` for core hooks) so it registers before any app starts.
 
 ### Releasing
 

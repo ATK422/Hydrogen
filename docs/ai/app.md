@@ -54,11 +54,11 @@ Type: `Hydrogen.App`, `Hydrogen.AppOptions`.
 
 What `app:start()` does, in order:
 
-1. Sorts systems so dependencies come first.
+1. Adds every system that an added system `use`s (transitively) that wasn't added, then sorts systems so dependencies come first.
 2. Runs every `init`.
 3. Starts the network. The server creates `ReplicatedStorage.HydrogenNetworkRemoteEvent`, `HydrogenNetworkUnreliableRemoteEvent` and `HydrogenNetworkRemoteFunction`. The client yields until they exist and the server has flushed this player's queued events.
 4. Runs every `start`.
-5. Runs `playerAdded` for players already in the game, then for every later join. On the server, binds `app:stop()` to `BindToClose`.
+5. Runs `playerAdded` for players already in the game, then for every later join, and `characterAdded` for their characters once a system defines it. On the server, binds `app:stop()` to `BindToClose`.
 
 More rules:
 
@@ -66,7 +66,8 @@ More rules:
 - `addNetwork` must cover the **same set of names** on the server and on the client. Wire ids come from the sorted names.
 - On the client, `WaitForChild` anything outside the LocalScript's own descendants before passing it in. Both adders take any `Instance`, so you don't need a cast.
 - `batching` must be decided in `App.new`, before the network starts. Turn it on for both apps.
-- `app:stop()` runs `playerRemoving` for remaining players, waits for all of them, runs the `stop` hooks, and restores any `replace`d systems.
+- `app:stop()` runs `characterRemoving` and then `playerRemoving` for remaining players, waits for all of them, runs the `stop` hooks, and restores any `replace`d systems.
+- `app:addSystem(X)` after `start` also adds and boots what `X` uses that isn't in the app yet, first. Adding the same system twice after start does nothing.
 
 ## Recipes
 
@@ -109,6 +110,7 @@ In a test, create the app after opening `Hydrogen.loopback()`, and always call `
 | `[HYDROGEN] addSystemsFolders found no systems in <name>` | Same as above, for systems. |
 | `[HYDROGEN] Network already initialized ignoring X registration` | A network object was created after `app:start()`. Move it into a module that `addNetwork` loads. |
 | `[HYDROGEN] Booted N systems in Xms (network Yms)` | Debug output from `debug = true`. |
+| `[HYDROGEN] Added <Y>: <X> uses it` | Debug output from `debug = true`: `Y` wasn't added, so the app added it because `X` uses it. Add it yourself to silence it, or leave it. |
 | `[HYDROGEN] replace must be called before app:start()` | Move the `replace` call earlier. |
 
 ## Works with

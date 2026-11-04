@@ -8,6 +8,7 @@ local Data = require("@self/Data")
 local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
+local Character = require("@self/Character")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -98,4 +99,6 @@ return {
 	State = State,
 	-- Kit: routes MarketplaceService.ProcessReceipt and grants each purchase once. Add it to the app.
 	Receipts = Receipts,
+	-- characterAdded / characterRemoving are system hooks; this holds the test helpers for fake characters.
+	Character = Character,
 }

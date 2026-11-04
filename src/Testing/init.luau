@@ -10,6 +10,7 @@ local Log = require("./Log")
 local Network = require("./Network")
 local Runtime = require("./Network/Runtime")
 local State = require("./State")
+local Character = require("./Character")
 local Expect = require("@self/Expect")
 
 export type Expectation = Expect.Expectation
@@ -52,6 +53,16 @@ export type Harness = {
 	as: (self: Harness, player: Player, fn: (...any) -> ...any, ...any) -> ...any,
 	player: (self: Harness, name: string) -> Player,
 	players: (self: Harness) -> { Player },
+
+	-- Gives a player a character, as LoadCharacter would: an existing one is removed first
+	-- (characterRemoving), then characterAdded runs. Without a model, makes one with a Humanoid
+	-- and an anchored HumanoidRootPart in workspace. Sets player.Character.
+	spawnCharacter: (self: Harness, player: Player, character: Model?) -> Model,
+	-- Removes the player's character, as when it's destroyed; characterRemoving runs.
+	removeCharacter: (self: Harness, player: Player) -> (),
+	-- Moves the player's character out of the DataModel (false) or back in (true), as streaming
+	-- does on a client. Out runs characterRemoving; back in runs characterAdded again.
+	streamCharacter: (self: Harness, player: Player, streamedIn: boolean) -> (),
 
 	-- Moves the fake clock forward, running every timer due by then.
 	advance: (self: Harness, seconds: number) -> (),
@@ -223,6 +234,31 @@ function Testing.harness(options: TestOptions?): Harness
 
 	function harness:leave(player: Player)
 		self.net:leave(player)
+		-- Roblox destroys a leaving player's character; the app removed it before playerRemoving.
+		if player.Character then
+			Character.removeFake(player)
+		end
+	end
+
+	function harness:spawnCharacter(player: Player, character: Model?): Model
+		if not self.net:owns(player) then
+			error(`[HYDROGEN] t:spawnCharacter expects a player from t:join() or the players option`, 2)
+		end
+		return Character.spawnFake(player, character)
+	end
+
+	function harness:removeCharacter(player: Player)
+		if not self.net:owns(player) then
+			error(`[HYDROGEN] t:removeCharacter expects a player from t:join() or the players option`, 2)
+		end
+		Character.removeFake(player)
+	end
+
+	function harness:streamCharacter(player: Player, streamedIn: boolean)
+		if not self.net:owns(player) then
+			error(`[HYDROGEN] t:streamCharacter expects a player from t:join() or the players option`, 2)
+		end
+		Character.streamFake(player, streamedIn)
 	end
 
 	function harness:as(player: Player, fn: (...any) -> ...any, ...: any): ...any
@@ -354,6 +390,7 @@ function Testing.harness(options: TestOptions?): Harness
 		end
 		-- State values are module singletons; the next test starts from their initial values.
 		step(State.reset)
+		step(Character._reset)
 		if Runtime.Observer == record then
 			Runtime.Observer = nil
 		end

@@ -84,9 +84,9 @@ Scope.new(name: string?): Scope
 A root scope that you destroy yourself. `name` appears in cleanup warnings.
 
 ```luau
-Scope.of(system: any, player: Player?): Scope
+Scope.of(system: any, subject: Instance?): Scope
 ```
-`Scope.of(system)` is the system's scope. `Scope.of(system, player)` is the system's scope for that player. Each is created on the first call, and every later call returns the same object. `system` is the table returned by `Hydrogen.define`, so pass `self` inside a hook, or the system table from anywhere else. Errors are listed under Errors and warnings; see Rules for when the call is valid.
+`Scope.of(system)` is the system's scope. `Scope.of(system, player)` is the system's scope for that player. `Scope.of(system, character)` is its scope for that character (see `character.md`). Each is created on the first call, and every later call returns the same object. `system` is the table returned by `Hydrogen.define`, so pass `self` inside a hook, or the system table from anywhere else. Errors are listed under Errors and warnings; see Rules for when the call is valid.
 
 Methods on `Scope`:
 
@@ -141,6 +141,7 @@ What is tracked automatically and what isn't:
 
 When `Scope.of` is valid:
 - `Scope.of(system)` works once the app that runs the system has started (from `init` on) and returns the same live scope until `app:stop()` runs that system's `stop` hook. After that it returns a destroyed scope. Before any app has started the system (for example, in the `define` constructor body), it errors.
+- `Scope.of(system, character)` works from the character's first `characterAdded` until that system's `characterRemoving` for it returns, then hands out a destroyed scope. It's separate from the player scope and always destroyed before it. For a model the app never added, it errors.
 - `Scope.of(system, player)` works from the moment the app starts adding the player (before the first `playerAdded`) until that system's `playerRemoving` for the player returns. During `playerRemoving`, the scopes of systems that already ran theirs are destroyed, and the scopes of systems still to run are live. After the player is fully removed, or once the app has stopped, it returns a destroyed scope. For a player the app hasn't added yet, it errors. That happens if you call it from your own `Players.PlayerAdded` connection that runs before Hydrogen's; use `playerAdded` instead.
 - A destroyed scope cleans everything added to it immediately, and `spawn`/`delay` on it never run. Late async code is therefore safe, but check `scope.alive` after a yield to skip work that would be wasted.
 
@@ -329,12 +330,13 @@ net:close()
 | `[HYDROGEN] scope:connect expects a signal with Connect, got <type>` (error) | The first argument isn't a signal (often `nil` from a typo'd event name). | Pass an `RBXScriptSignal` or a signal object with `Connect`. |
 | `[HYDROGEN] Scope.of: <system> isn't running in an app. Ask for its scope from init or later` (error) | The system isn't in any started app: called at require/constructor time, or the system was never added to an app. | Call from `init`/`start`/hooks or later, and add the system to the app. |
 | `[HYDROGEN] Scope.of: <Name> hasn't been added to the app yet. Ask for a player's scope from playerAdded or later` (error) | The app doesn't know this player yet (your own `PlayerAdded` connection ran first, or a fake player object the app never saw). | Use the `playerAdded` hook; in tests use `net:join` (loopback). |
+| `[HYDROGEN] Scope.of: <model> isn't a character (or other subject) the app has added. Ask for its scope from characterAdded or later` (error) | `Scope.of(system, model)` for a model that isn't a character the app has added. | Ask from `characterAdded`, and in tests give the player a character with `t:spawnCharacter`. |
 
 An error inside a `scope:spawn`/`scope:delay` callback is not a `[HYDROGEN]` message. It is rethrown in that thread as `<error>` plus a traceback, like any `task.spawn` error.
 
 ## Works with
 
-- **Systems (`Hydrogen.define`, `App`)**: Scope's lifetimes are the app's. Player scopes follow `playerAdded`/`playerRemoving` and system scopes follow `start`/`stop`, both in dependency order. `app:replace` fakes share the original's scopes.
+- **Systems (`Hydrogen.define`, `App`)**: Scope's lifetimes are the app's. Player scopes follow `playerAdded`/`playerRemoving`, character scopes follow `characterAdded`/`characterRemoving` (`character.md`), and system scopes follow `start`/`stop`, all in dependency order. `app:replace` fakes share the original's scopes.
 - **Network**: every `:On` returns a disconnect function, so `scope:add(Remote:On(fn))` ties a listener to a lifetime. Prefer system-scope listeners and check the `player` argument.
 - **Data / PlayerState**: load inside `playerAdded` (for example `PlayerData:waitForLoad(player)`, which yields and returns `false` if the player left or the load failed), then check `Scope.of(self, player).alive` before building. Keep saving in `playerRemoving`, not in scope cleanup.
 - **State**: `observe` returns a disconnect function, so `Scope.of(self, player):add(Coins:observe(player, fn))` stops observing when the player leaves. On the client, put UI observers in `Scope.of(self)` or a `child()` per screen.

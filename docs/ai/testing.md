@@ -112,7 +112,10 @@ t:add(...: any): ()                 -- add systems; after start they init+start 
 t:replace(original: any, fake: { [any]: any }): ()   -- only before start (start = false)
 t:start(): ()                       -- only with start = false; errors if already started
 t:join(name: string?): Player       -- new fake client; playerAdded runs; handshake delivers queued events
-t:leave(player: Player): ()         -- playerRemoving runs (after that player's playerAdded finished)
+t:leave(player: Player): ()         -- characterRemoving, then playerRemoving (after that player's playerAdded finished); destroys a fake character
+t:spawnCharacter(player: Player, character: Model?): Model  -- like LoadCharacter: old character removed, player.Character set, characterAdded runs
+t:removeCharacter(player: Player): ()  -- characterRemoving runs; player.Character = nil
+t:streamCharacter(player: Player, streamedIn: boolean): ()  -- character leaves the DataModel (false) or returns (true), as with client streaming
 t:as(player: Player, fn: (...any) -> ...any, ...any): ...any  -- run client code as that player
 t:player(name: string): Player      -- look up a joined player; errors if none
 t:players(): { Player }             -- players still in
@@ -437,4 +440,5 @@ This file is the testing module itself. The tools under it, `app:replace(origina
 
 - **Hydrogen.Clock** (clock.md): the harness installs `Hydrogen.Clock.fake()`, available as `t.clock`. Any code using `Hydrogen.Clock` advances with `t:advance`.
 - **Network** (clientEvent, serverEvent, clientFunction, serverFunction, middleware, `Hydrogen.rateLimit`): all run unchanged over the loopback. `App.new({ batching = true })` is accepted but batching is skipped under loopback.
+- **Character hooks** (character.md): fake players have no character until `t:spawnCharacter(player)`. The harness destroys the models it built when it closes.
 - **Kit modules (Data, PlayerState, State, Scope, Receipts)** are systems or use systems: pass them in `systems` and fake their stores with `replace`. Their timers use `Hydrogen.Clock`, so `t:advance` drives autosaves, retries, cooldowns and State's end-of-frame send. The harness calls `Hydrogen.State.reset()` when it closes.
