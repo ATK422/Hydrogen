@@ -623,4 +623,4 @@ pesde publish --dry-run
 pesde publish
 ```
 
-Only files listed under `includes` in `pesde.toml` are published: the source, `pesde.toml`, `README.md`, `LICENSE` and `CHANGELOG.md`. `default.project.json` is deliberately left out so pesde generates the consumer layout.
+Only files listed under `includes` in `pesde.toml` are published: the source, `pesde.toml`, `README.md`, `LICENSE`, `CHANGELOG.md`, and the agent docs (`AGENTS.md`, `llms.txt`, `docs/ai/*.md`; see `AGENTS.md` for their format and when to update them). `default.project.json` is deliberately left out so pesde generates the consumer layout.

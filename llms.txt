@@ -1,0 +1,32 @@
+# Hydrogen
+
+> Hydrogen (`atk422/hydrogen` on pesde) is a Luau framework for Roblox games: dependency-ordered systems with lifecycle and player hooks, an App that boots them, a typed schema-checked network, and a batteries-included kit (data, player state, replicated state, scopes, receipts, testing). Its goals are developer experience, reliability and performance, and it aims to feel like a standard library: everything you need is already there.
+
+Read `docs/ai/systems.md` and `docs/ai/app.md` first. Every file follows the same layout: Use it when, Quick start, API, Rules, Recipes, Mistakes, Testing, Errors and warnings, Works with. Require Hydrogen as `require(ReplicatedStorage.roblox_packages.hydrogen)` and write schemas with `Hydrogen.gt` (GreenTea).
+
+## Core
+
+- [Systems](docs/ai/systems.md): `Hydrogen.define`, `use`, `init`/`start`/`playerAdded`/`playerRemoving`/`stop`, ordering rules
+- [App](docs/ai/app.md): `Hydrogen.App.new`, `addNetwork`, `addSystemsFolders`, `start`, `stop`, boot sequence
+- [Network](docs/ai/network.md): `clientEvent`, `serverEvent`, `clientFunction`, `serverFunction`, `namespace`, validation, queuing, timeouts
+- [Middleware](docs/ai/middleware.md): `Use`, `UseRequest`, `UseResponse`, `useMiddleware`, `logger`, `rateLimit`, `DROP`
+- [Network performance](docs/ai/network-performance.md): `:Unreliable()`, batching, `:Encode()`
+
+## Kit
+
+- [Data](docs/ai/data.md): `Hydrogen.Data`, DataStore persistence with session locking, migrations, autosave
+- [PlayerState](docs/ai/player-state.md): `Hydrogen.PlayerState`, per-player state loaded from Data, per-field replication
+- [State](docs/ai/state.md): `Hydrogen.State`, server-authoritative state replicated to clients
+- [Scope](docs/ai/scope.md): `Hydrogen.Scope`, cleanup tied to system and player lifetimes
+- [Receipts](docs/ai/receipts.md): `Hydrogen.Receipts`, idempotent developer product and game pass handling
+
+## Testing
+
+- [Testing primitives](docs/ai/loopback.md): `app:replace`, `Hydrogen.loopback()`
+- [Test harness](docs/ai/testing.md): one-call test setup, expectations, running game tests under Lune
+- [Clock](docs/ai/clock.md): the time source that core and kit modules use, and the fake clock for tests
+
+## Optional
+
+- [README](README.md): the full human guide, including design rationale and the contributor guide
+- [CHANGELOG](CHANGELOG.md): what changed in each version, including breaking changes

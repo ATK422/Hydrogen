@@ -9,6 +9,9 @@ includes = [
 	"README.md",
 	"LICENSE",
 	"CHANGELOG.md",
+	"AGENTS.md",
+	"llms.txt",
+	"docs/ai/*.md",
 	"src/**/*.luau",
 	"src/.luaurc",
 ]
