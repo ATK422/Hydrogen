@@ -499,6 +499,7 @@ That is the whole setup. The store loads each player in `playerAdded`, saves and
 | --- | --- |
 | `store:get(player)` | The loaded data. It is deep-frozen; change it with `update`. Errors if not loaded. |
 | `store:find(player)` / `store:isLoaded(player)` | `get` without the error, and whether the load succeeded. |
+| `store:waitForLoad(player, timeout?)` | Yields until the player's load finishes (or, if it hasn't started, while they're in the game). Returns whether it loaded. |
 | `store:update(player, fn)` | Runs `fn` on a copy, checks the result against the schema and commits it in one step. Return `false` to abort. Returns whether it committed. |
 | `store:save(player)` | Saves now and yields until stored. Returns `ok, err`. Saves already running are joined, not repeated. |
 | `store:transaction({ a, b }, fn)` | Changes several players all-or-nothing, for trades. `fn` gets `{ [player]: data }`. |
@@ -525,7 +526,7 @@ end)
 -- "aborted" or "failed":    return NotProcessedYet; Roblox asks again later
 ```
 
-The id is recorded in the same commit as the change, in the record's own metadata (the last 100 ids are kept), and `updateOnce` only reports success once a save holding both has gone through. If the save fails, the grant stays in memory without being repeated, and the next call for that id saves before answering `"duplicate"`.
+The id is recorded in the same commit as the change, in the record's own metadata (the last 100 ids are kept), and `updateOnce` only reports success once a save holding both has gone through. If the save fails, the grant stays in memory without being repeated, and the next call for that id saves before answering `"duplicate"`. A player leaving waits for a grant that is still saving; once their data is being released, `updateOnce` answers `"failed"` so the purchase is granted on their next server.
 
 #### Trades: `transaction`
 
@@ -565,6 +566,7 @@ Rules:
 
 - **Data stores do nothing on clients.** Defining one in a shared module is safe (and lets a shared `PlayerState` use it); the client's copy never loads or saves.
 - **`update` callbacks must not yield**, so no other change can slip in between reading and writing. A yield errors and nothing changes.
+- **An `update` called inside another callback for the same key joins it.** A helper such as `addCoins(player, n)` that calls `PlayerData:update` works inside an `updateOnce` grant or a `transaction`: it changes the same pending copy, which commits or aborts as a whole. A nested update can't abort on its own (return `false` from the outer callback), and `updateOnce` and `transaction` can't be nested. Assigning a `PlayerState` field inside a callback joins it the same way. `get` inside a callback still returns the last committed data.
 - **Session locking:** a key is held by one server at a time. A load waits up to `loadTimeout` for another server to release it (a player who just left that server), then fails. A lock not refreshed for `lockTimeout` seconds is treated as abandoned (that server crashed) and taken over, with a warning. Autosave refreshes the lock even when nothing changed.
 - **A server that loses its lock stops saving** that key and kicks the player, rather than overwriting the newer server's data.
 - **When a load fails** (DataStores down, lock never released, data that fails validation), the player is kicked by default. Until they are gone, `get` returns the template so other systems' `playerAdded` still run, `isLoaded` is `false`, and nothing is saved. A player who leaves while their load is waiting for a lock stops the wait.
@@ -762,7 +764,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 105 | Passed: 105` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 108 | Passed: 108` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 

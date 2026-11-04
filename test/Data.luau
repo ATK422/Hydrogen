@@ -699,6 +699,137 @@ return function()
 			return nil
 		end)
 
+		test.case("updates nested in another update's callback join that change", function()
+			local backend = Data.memory()
+			local store = otherServer("Nested", backend)
+			check.is_true((store:load("k")))
+			check.is_true((store:load("other")))
+
+			-- A game helper that uses the store's own API, called from a purchase grant.
+			local function addCoins(key: string, amount: number)
+				store:update(key, function(data)
+					data.coins += amount
+					return nil
+				end)
+			end
+
+			check.equal(store:updateOnce("k", "purchase-1", function(data)
+				table.insert(data.items, "crate")
+				addCoins("k", 100)
+				return nil
+			end), "applied")
+			check.equal(store:get("k").coins, 100)
+			check.equal(store:get("k").items[1], "crate")
+			check.equal(backend:peek("Nested", "k").data.coins, 100)
+
+			-- The outer abort undoes the nested change too.
+			check.is_false(store:update("k", function()
+				addCoins("k", 5)
+				return false
+			end))
+			check.equal(store:get("k").coins, 100)
+
+			-- A nested update can't abort by itself, and these can't nest at all.
+			check.should_error(function()
+				store:update("k", function()
+					store:update("k", function()
+						return false
+					end)
+					return nil
+				end)
+				return nil
+			end)
+			check.should_error(function()
+				store:update("k", function()
+					store:updateOnce("k", "purchase-2", function() end)
+					return nil
+				end)
+				return nil
+			end)
+			check.should_error(function()
+				store:update("k", function()
+					store:transaction({ "k", "other" }, function() end)
+					return nil
+				end)
+				return nil
+			end)
+			check.equal(store:get("k").coins, 100)
+
+			-- Other keys are unaffected by the pending copy.
+			store:update("k", function()
+				addCoins("other", 1)
+				return nil
+			end)
+			check.equal(store:get("other").coins, 1)
+			store:unload("k")
+			store:unload("other")
+			return nil
+		end)
+
+		test.case("waitForLoad waits for a player's load and reports failures", function()
+			local backend = Data.memory()
+			local PlayerData = Data.player("PlayerData", {
+				template = TEMPLATE,
+				backend = backend,
+				loadTimeout = 10000,
+				onLoadFailed = function() end,
+			})
+			local elsewhere = otherServer("PlayerData", backend)
+			check.is_true((elsewhere:load("-2")))
+
+			local net = openLoopback()
+			local app = newApp()
+			app:addSystem(PlayerData)
+			app:start()
+			local alice = net:join("Alice")
+			local bob = net:join("Bob")
+			check.is_true(PlayerData:waitForLoad(alice))
+
+			-- Bob's data is held elsewhere; he is still loading.
+			local result: boolean? = nil
+			task.spawn(function()
+				result = PlayerData:waitForLoad(bob)
+			end)
+			task.wait()
+			check.equal(result, nil)
+			elsewhere:unload("-2")
+			check.is_true(waitUntil(function()
+				return result ~= nil
+			end))
+			check.equal(result, true)
+
+			net:leave(alice)
+			check.is_true(waitUntil(function()
+				return not PlayerData:isLoaded(alice)
+			end))
+			check.is_false(PlayerData:waitForLoad(alice))
+			return nil
+		end)
+
+		test.case("unloading waits for a purchase that is still saving", function()
+			local backend = Data.memory()
+			local store = otherServer("SlowReceipts", backend)
+			check.is_true((store:load("k")))
+
+			backend.latency = 0.05
+			local result: string? = nil
+			task.spawn(function()
+				result = store:updateOnce("k", "purchase-1", function(data)
+					data.coins = 10
+					return nil
+				end)
+			end)
+			store:unload("k")
+			check.equal(result, "applied")
+			local record = backend:peek("SlowReceipts", "k")
+			check.equal(record.data.coins, 10)
+			check.equal(record.once[1], "purchase-1")
+			check.equal(record.lock, nil)
+			-- Too late once the lock is going: the purchase is retried on the next server.
+			check.equal(store:updateOnce("k", "purchase-2", function() end), "failed")
+			return nil
+		end)
+
 		test.case("requests wait for DataStore budget", function()
 			local backend = Data.memory()
 			local store = otherServer("Budget", backend)

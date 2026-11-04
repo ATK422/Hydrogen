@@ -71,6 +71,10 @@ type Session = {
 	waiting: { thread },
 	-- Release the lock with the next write.
 	releasing: boolean,
+	-- The copy an update callback is changing, so updates nested inside it change it too.
+	draft: any?,
+	-- updateOnce calls still saving; unload waits for them.
+	onceRunning: number,
 }
 
 type Group = {
@@ -120,6 +124,24 @@ local function runSync(what: string, fn: (...any) -> ...any, ...: any): ...any
 		error(debug.traceback(thread, tostring(results[2])), 0)
 	end
 	return table.unpack(results, 2, results.n)
+end
+
+-- Runs fn on drafts while marking them as the sessions' pending copies. Returns fn's first result.
+local function runOn(sessions: { Session }, drafts: { any }, what: string, fn: (...any) -> ...any, arg: any): any
+	for index, session in sessions do
+		if session.draft ~= nil then
+			error(`[HYDROGEN] {what} can't run inside another update's callback for the same data; change the data argument instead`, 0)
+		end
+		session.draft = drafts[index]
+	end
+	local ok, result = pcall(runSync, what, fn, arg)
+	for _, session in sessions do
+		session.draft = nil
+	end
+	if not ok then
+		error(result, 0)
+	end
+	return result
 end
 
 local Store = {}
@@ -369,6 +391,8 @@ function Store.load(self: Store, key: any, cancelled: (() -> boolean)?): (boolea
 		busy = false,
 		waiting = {},
 		releasing = false,
+		draft = nil,
+		onceRunning = 0,
 	}
 	self._sessions[recordKey] = session
 
@@ -538,8 +562,17 @@ end
 -- Runs fn on a copy of the data, checks the result and commits it. Returns whether it committed.
 function Store.update(self: Store, key: any, fn: (data: any) -> ...any): boolean
 	local session = self:_loaded(key, "update")
+	if session.draft ~= nil then
+		-- Called from inside another update's callback (a helper like addCoins): it joins that
+		-- change, which commits or aborts as a whole.
+		if runSync("update", fn, session.draft) == false then
+			error(`[HYDROGEN] {self.name}: an update nested inside another update can't abort on its own; return false from the outer callback`, 2)
+		end
+		return true
+	end
+
 	local draft = Tables.copy(session.data)
-	if runSync("update", fn, draft) == false then
+	if runOn({ session }, { draft }, "update", fn, draft) == false then
 		return false
 	end
 
@@ -559,6 +592,11 @@ end
 -- One top-level field, without copying the rest. Used by PlayerState.
 function Store.setField(self: Store, key: any, field: string, value: any)
 	local session = self:_loaded(key, "set")
+	if session.draft ~= nil then
+		-- Inside an update's callback: part of that change, checked when it commits.
+		session.draft[field] = Tables.copy(value)
+		return
+	end
 	local current = session.data
 	if current[field] == value then
 		return
@@ -578,10 +616,23 @@ end
 -- returns only after a save holding both succeeded. Meant for purchase receipts.
 function Store.updateOnce(self: Store, key: any, id: string, fn: (data: any) -> ...any): UpdateOnceResult
 	local session = self:_session(key)
-	if not session or session.status ~= "loaded" then
+	if not session or session.status ~= "loaded" or session.releasing then
 		return "failed"
 	end
+	if session.draft ~= nil then
+		error(`[HYDROGEN] {self.name}: updateOnce can't run inside another update's callback`, 2)
+	end
 
+	session.onceRunning += 1
+	local ok, result = pcall(self._updateOnce, self, session, key, id, fn)
+	session.onceRunning -= 1
+	if not ok then
+		error(result, 0)
+	end
+	return result
+end
+
+function Store._updateOnce(self: Store, session: Session, key: any, id: string, fn: (data: any) -> ...any): UpdateOnceResult
 	local recordedAt = session.onceVersion[id]
 	if recordedAt then
 		if session.savedVersion >= recordedAt then
@@ -592,13 +643,13 @@ function Store.updateOnce(self: Store, key: any, id: string, fn: (data: any) -> 
 	end
 
 	local draft = Tables.copy(session.data)
-	if runSync("updateOnce", fn, draft) == false then
+	if runOn({ session }, { draft }, "updateOnce", fn, draft) == false then
 		return "aborted"
 	end
 	local changed = Tables.share(draft, session.data)
 	local ok, cause = self:_validate(draft, changed)
 	if not ok then
-		error(`[HYDROGEN] {self.name} updateOnce for {self:_describe(key)} rejected, {cause}`, 2)
+		error(`[HYDROGEN] {self.name} updateOnce for {self:_describe(key)} rejected, {cause}`, 0)
 	end
 
 	self:_commit(session, Tables.freeze(draft))
@@ -627,7 +678,11 @@ function Store.transaction(self: Store, keys: { any }, fn: (data: { [any]: any }
 		end
 	end
 
-	if runSync("transaction", fn, drafts) == false then
+	local sessionDrafts = {}
+	for index, session in sessions do
+		sessionDrafts[index] = drafts[session.owner]
+	end
+	if runOn(sessions, sessionDrafts, "transaction", fn, drafts) == false then
 		return false
 	end
 
@@ -914,6 +969,10 @@ function Store.unload(self: Store, key: any)
 			end
 		end
 
+		-- A purchase being granted is stored before the lock goes.
+		while session.onceRunning > 0 do
+			task.wait()
+		end
 		session.releasing = true
 		local ok, err = self:_save(session)
 		if not ok and session.status == "loaded" then
@@ -991,6 +1050,25 @@ function Store.reopen(self: Store)
 	self._closing = false
 end
 
+-- Waits until the key's load finishes. Returns whether it loaded. For a player whose load
+-- hasn't started yet, waits while they're in the game, up to timeout seconds.
+function Store.waitForLoad(self: Store, key: any, timeout: number?): boolean
+	local recordKey = self._config.keyOf(key)
+	local limit = timeout or ((self._config.loadTimeout or LOAD_TIMEOUT) + 30)
+	local began = os.clock()
+	while os.clock() - began < limit do
+		local session = self._sessions[recordKey]
+		if session and session.status ~= "loading" then
+			return session.status == "loaded" and not session.releasing
+		end
+		if not session and (type(key) ~= "table" or key.Parent == nil) then
+			return false
+		end
+		task.wait()
+	end
+	return false
+end
+
 function Store.isLoaded(self: Store, key: any): boolean
 	local session = self:_session(key)
 	return session ~= nil and session.status == "loaded"
@@ -1041,6 +1119,8 @@ function Store.placeholder(self: Store, key: any)
 		busy = false,
 		waiting = {},
 		releasing = false,
+		draft = nil,
+		onceRunning = 0,
 	}
 end
 

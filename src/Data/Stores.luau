@@ -71,8 +71,12 @@ type Methods<K, T> = {
 	find: (self: any, key: K) -> T?,
 	-- Whether the key loaded successfully and is still held.
 	isLoaded: (self: any, key: K) -> boolean,
+	-- Waits for the key's load to finish and returns whether it loaded. For a player whose load
+	-- hasn't started, waits while they're in the game. Yields.
+	waitForLoad: (self: any, key: K, timeout: number?) -> boolean,
 	-- Runs fn on a copy of the data; return false to abort. The result is checked against the
 	-- schema and committed in one step. Returns whether it committed. fn must not yield.
+	-- Called inside another update's fn for the same key, it changes that copy instead.
 	update: (self: any, key: K, fn: (data: T) -> ...any) -> boolean,
 	-- Like update, but runs once per id, and returns after a save holding both the change and
 	-- the id succeeded. "applied" or "duplicate" mean the change is stored. Yields.
