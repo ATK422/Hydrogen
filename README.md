@@ -77,9 +77,10 @@ Hydrogen.Log            -- tagged, levelled logging: Log.of(system or name, play
 Hydrogen.Character      -- test helpers for fake characters; the characterAdded / characterRemoving hooks need nothing
 Hydrogen.Signal         -- typed in-process signals: Signal.new(), Connect, Once, Wait, Fire
 Hydrogen.Scheduler      -- timers tied to lifetimes: after, every, fixed (game loop), debounce, throttle
+Hydrogen.Component      -- code bound to CollectionService-tagged instances: Component.new(tag, options)
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Log: `Hydrogen.Logger`, `Hydrogen.LogLevel`, `Hydrogen.LogThreshold`, `Hydrogen.LogFields`, `Hydrogen.LogMessage`, `Hydrogen.LogLine`, `Hydrogen.LogSink`, `Hydrogen.LogBuffer` and `Hydrogen.LogRateLimitOptions`. Signal adds `Hydrogen.Signal<T...>` and `Hydrogen.Connection`; Scheduler adds `Hydrogen.Timer`, `Hydrogen.EveryOptions` and `Hydrogen.FixedOptions`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Log: `Hydrogen.Logger`, `Hydrogen.LogLevel`, `Hydrogen.LogThreshold`, `Hydrogen.LogFields`, `Hydrogen.LogMessage`, `Hydrogen.LogLine`, `Hydrogen.LogSink`, `Hydrogen.LogBuffer` and `Hydrogen.LogRateLimitOptions`. Signal adds `Hydrogen.Signal<T...>` and `Hydrogen.Connection`; Scheduler adds `Hydrogen.Timer`, `Hydrogen.EveryOptions` and `Hydrogen.FixedOptions`. For Component: `Hydrogen.Component<I, T>` and `Hydrogen.ComponentOptions<I, A, T>`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -1456,6 +1457,74 @@ With it on, identical lines (same level and text) beyond `burst` in `window` sec
 - **`key=value` fields instead of interpolation.** Fields stay structured for sinks (an overlay can filter by `player`, analytics can count `item`), and the printed form is still one readable line.
 - **Sinks can't break the caller.** Logging is called from everywhere, including error paths. A sink that throws or yields would turn a log line into a new bug at the worst moment, so each sink is isolated and reported once.
 - **Rate limiting is opt-in.** Dropping lines hides information, so you decide when the trade is worth it. When it's on, the summary line keeps the count honest.
+### Components
+
+`Hydrogen.Component` binds code to instances with a CollectionService tag. A component constructs one object, with its own scope, for every tagged instance in the game. It destroys the object when the instance is untagged, destroyed or streamed out. Tag parts in Studio and the code finds them wherever they are.
+
+```luau
+-- ServerScriptService/Systems/Coin.luau
+local Players = game:GetService("Players")
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local WalletSystem = require(script.Parent.Wallet)
+local gt = Hydrogen.gt
+
+return Hydrogen.Component.new("Coin", function(use)
+	local Wallet = use(WalletSystem)
+
+	return {
+		ancestors = { workspace },                     -- leave the template in ReplicatedStorage alone
+		attributes = gt.table({ Value = gt.number() }), -- typed, and waited for
+		construct = function(coin: BasePart, scope: Hydrogen.Scope, attributes)
+			scope:connect(coin.Touched, function(hit: BasePart)
+				local player = hit.Parent and Players:GetPlayerFromCharacter(hit.Parent)
+				if player then
+					Wallet.give(player, attributes.Value)
+					coin:Destroy()
+				end
+			end)
+			return { value = attributes.Value } -- the object: Coin:get(coin)
+		end,
+	}
+end)
+```
+
+A component is a system, so the systems folder picks it up like any other (`app:addSystemsFolders(ServerScriptService.Systems)`). Other systems `use` it and look objects up:
+
+```luau
+Coin:get(instance)          -- the object, or nil
+Coin:has(instance)          -- constructed?
+Coin:all()                  -- every object
+Coin:instances()            -- every instance with an object
+Coin:wait(instance, 5)      -- yields until constructed, or nil after 5 seconds
+```
+
+Options:
+
+- `construct(instance, scope, attributes)` (required) runs for each instance, in its own thread, so it may yield. Add cleanup to `scope`. What it returns is the object. If it returns nothing, the instance is the object.
+- `destroy(object, instance)` runs before the scope is destroyed, for objects whose `construct` returned. Use it for work that needs the object, such as saving its state. It must not yield.
+- `ancestors = { workspace }` binds only instances under one of these. It is checked again when an instance moves.
+- `children = { "Hitbox" }` or `{ Hitbox = "BasePart" }` waits for these direct children before constructing.
+- `attributes = gt.table({ ... })` (or the plain table `{ Value = gt.number() }`) waits until the attributes match a GreenTea schema. `construct` gets them typed, and the table stays current while the object exists.
+- `timeout` sets the seconds to wait for children or attributes before warning (default 5). Waiting goes on after the warning.
+
+Rules:
+
+- **An object exists exactly while** the instance has the tag, is in the DataModel, is under `ancestors`, has its required children and has valid attributes. When any of those stops, the object is destroyed (its `destroy`, then its scope). When they all hold again, `construct` makes a new object with a new scope. Objects are never reused.
+- **Streaming:** streaming out parents the instance to nil, which destroys its object. Streaming back in constructs a new one, so a part can be constructed many times in a session. Keep state that must survive on the server or in attributes. For models with required children, use `ModelStreamingMode` `Atomic` or `Persistent`.
+- **Lifecycle:** a component binds during its own `start`, after the systems it `use`s have started, and before the systems that use it start. `app:stop()` destroys every object (in the component's `stop` hook) and stops listening. A failed boot does too.
+- **Errors stay contained.** A `construct` that errors is warned with the instance's full name. Its scope is cleaned, and every other instance and component carries on. It is tried again when the instance re-qualifies (retagged, streamed back in). If an instance leaves while its `construct` is still yielding, the thread is cancelled and `destroy` isn't called.
+- **Signal order doesn't matter:** every signal re-checks the instance from scratch, so deferred signals and tags or parents changing in any order end in the right state.
+- **Either side, or both.** A component runs in the app you add it to. Put client visuals in the client's systems and server logic in the server's. Several components can share a tag.
+- **Cost:** CollectionService signals, plus per-instance connections only for the options you use (`AncestryChanged`, `ChildAdded`/`ChildRemoved`, `AttributeChanged`). There is no per-frame work.
+- **Testing:** under `Hydrogen.test` components don't use signals. They re-check tagged instances at the end of every `t:advance`, so tag, parent and attribute changes are seen deterministically in Studio and under Lune. Use the real Instance API, then `t:advance(0)`. Lune's Instances have tags and attributes but no events (`Touched` and so on), so test event-driven `construct` code in Studio.
+
+#### Why it's designed this way
+
+- **A component is a system.** It gets the app's lifecycle with nothing new to learn. It starts after what it uses, is torn down on `app:stop()`, is collected from systems folders, and can be faked with `replace`. Dependencies come through `use`, as everywhere else in Hydrogen.
+- **Functions, not classes.** `construct` returns whatever object you want, so its type is inferred, with no `self` annotations or metatables to set up. The scope replaces the cleanup boilerplate that class-based components usually need.
+- **One rule for when an object exists.** Tags, parents, streaming, children and attributes all feed the same check. "Exists while all conditions hold, new object every time" covers churn, streaming and partial loads without special cases. Re-checking from scratch on every signal makes deferred signal ordering irrelevant.
+- **Warn, don't give up.** A missing child is usually a slow stream or a broken template. Warning after the timeout points at the problem, and waiting on means a late arrival still works.
+- **Polling in tests.** Lune's Instances have no signals, and Studio's are deferred. Re-checking on `t:advance` makes component tests deterministic in both, while a game pays only for signals.
 
 ---
 
@@ -1538,6 +1607,9 @@ src/
     init.luau          Signal: typed in-process signals, listeners on a reused runner thread
   Scheduler/
     init.luau          Scheduler: after, every, fixed, debounce, throttle on one min-heap and one Clock.delay
+  Component/
+    init.luau          Component.new: options, per-instance entries, construct/destroy, lookups
+    Source.luau        where tag changes come from: CollectionService signals, or polling under a fake clock
   Testing/
     init.luau          Hydrogen.test and Hydrogen.harness
     Expect.luau        expectations on deliveries, argument matching, failure messages
@@ -1553,6 +1625,7 @@ test/
   Log.luau             Hydrogen.Log: levels, laziness, sinks, rate limiting, harness capture, Log.warn compatibility
   Character.luau       character hooks, the Definition.hooks extension point, and used systems being added
   Signal.luau  Scheduler.luau
+  Component.luau       Hydrogen.Component under Hydrogen.test (polling), and through CollectionService signals on a fake world
   Fixtures/            modules the suites require
 bench/                 micro-benchmarks, not run by the suite (lune run bench/Signal)
 docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them

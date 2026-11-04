@@ -12,6 +12,7 @@ local Log = require("@self/Log")
 local Character = require("@self/Character")
 local Signal = require("@self/Signal")
 local Scheduler = require("@self/Scheduler")
+local Component = require("@self/Component")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -83,6 +84,8 @@ export type Connection = Signal.Connection
 export type Timer = Scheduler.Timer
 export type EveryOptions = Scheduler.EveryOptions
 export type FixedOptions = Scheduler.FixedOptions
+export type Component<I, T> = Component.Component<I, T>
+export type ComponentOptions<I, A, T> = Component.Options<I, A, T>
 
 return {
 	App = App,
@@ -136,4 +139,6 @@ return {
 	Signal = Signal,
 	-- Timers tied to lifetimes: after, every, fixed (game loop), debounce, throttle.
 	Scheduler = Scheduler,
+	-- Code bound to CollectionService-tagged instances, one object and scope each: Component.new(tag, options).
+	Component = Component,
 }
