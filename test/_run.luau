@@ -141,6 +141,7 @@ require("./Definition")()
 require("./App")()
 require("./Network")()
 require("./Testing")()
+require("./Scope")()
 
 local frktest = require("@pkg/frktest")
 local console_reporter = frktest.reporters.console_reporter

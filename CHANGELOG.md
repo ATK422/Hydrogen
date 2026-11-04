@@ -2,6 +2,13 @@
 
 All notable changes to Hydrogen are listed here. Versions follow [Semantic Versioning](https://semver.org); while the version is `0.x`, a minor bump can contain breaking changes.
 
+## Unreleased
+
+### Added
+
+- `Hydrogen.Scope` and the `Scope` type: cleanup tied to lifetimes. A scope tracks functions, threads, connections, Instances, other scopes and objects with `Destroy`, `Disconnect` or `cancel`, and cleans them newest first; a task that errors is warned about and the rest still run. `scope:connect`, `scope:spawn`, `scope:delay` and `scope:child` create and track in one call. A destroyed scope cleans anything added to it straight away.
+- System and player scopes: a hook that declares a trailing parameter (`function S:start(scope)`, `function S:playerAdded(player, scope)`) receives the system's scope, or its scope for that player. Player scopes are destroyed right after the system's `playerRemoving` for that player (reverse dependency order); system scopes right after the system's `stop` hook on `app:stop()`, or when the boot fails. `Hydrogen.Scope.of(system, player?)` returns the same scopes from anywhere. Systems that don't ask create no scope.
+
 ## 0.4.0
 
 ### Added
