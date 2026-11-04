@@ -95,8 +95,8 @@ export type DebugInspectable = { name: string, find: (self: any, player: Player)
 Debug.bootOutput(message: string): ()         -- pass as AppOptions.output; records and prints boot timings
 Debug.boot(): Hydrogen.BootReport?            -- this side's last boot timings (milliseconds)
 export type BootReport = { total: number, network: number, systems: { { name: string, init: number, start: number } } }
-Debug.warnings(): { Hydrogen.DebugWarning }   -- this side's last 50 [HYDROGEN] warnings, oldest first
-export type DebugWarning = { text: string, at: number } -- at = Clock.time()
+Debug.warnings(): { Hydrogen.DebugWarning }   -- this side's last 50 warn and error log lines, oldest first
+export type DebugWarning = { text: string, at: number, level: string? } -- at = Clock.time(); level "warn" or "error"
 
 Debug.isAuthorized(player: Player): boolean   -- server: runs authorize, or the default check
 Debug.fetch(userId: number?): Hydrogen.DebugView?  -- client, YIELDS: the server's view, nil if not authorized
@@ -129,16 +129,34 @@ Debug.toggle(): ()  -- client; what the key does
 - **Dropped** = events and requests that arrived but never reached a listener or handler: dropped by middleware (`Hydrogen.rateLimit`, guards returning `Hydrogen.DROP`) or failing the schema. Undecodable payloads, unknown ids and malformed batches fail before middleware and show only as warnings.
 - **Global middleware order.** The stats middleware keeps itself last in the global chain, so it sees incoming messages before your global middleware can drop them, and outgoing messages after your global middleware ran. A global middleware added after stats started is handled from its second message on.
 - **Latency** is measured per calling thread: from the outgoing request to the incoming response on the same thread. Calls that time out or error record nothing. `handler` is the time between the handler starting and returning on the answering side.
-- **Authorization.** Default: allowed in Studio, for the owner of a user-owned game, or a UserId in `users`. `authorize` replaces all of it (it is the only check when given). An `authorize` that errors denies and warns. Unauthorized requests get `nil`, do no work and don't turn stats on. Group games: use `users` or `authorize`.
+- **Authorization.** Default: allowed in Studio, for the owner of a user-owned game, a UserId in `users`, or, when the game defines the `Hydrogen.Guards` permission `"debug"`, a player who has it (`Guards.can(player, "debug")`). `authorize` replaces all of it (it is the only check when given). An `authorize` that errors denies and warns. Unauthorized requests get `nil`, do no work and don't turn stats on. Group games: use `users` or `authorize`.
 - **`Hydrogen/Debug` is rate-limited** to 4 requests per second per player (burst 8); a faster caller's `fetch` errors with `Hydrogen/Debug request was dropped by middleware`. The overlay's own requests appear in the network table under that name.
 - **Read-only.** The server sends formatted text (`DebugRow.value`), never live tables; nothing in the view can change server state. Tables show up to 12 entries and 3 levels; strings up to 120 characters.
 - **The overlay** opens outside Studio only if the server answers this player, so unauthorized players see nothing when they press the key. It refreshes once per `refresh` seconds while open, never per frame, and is built the first time it opens. The key is ignored while typing in a TextBox (gameProcessed).
 - **Boot timings** exist only when the app was made with `output = Hydrogen.Debug.bootOutput` (and `debug = true`). They still print.
-- **Warnings** are captured only while `Hydrogen.Debug` runs in an app on that side (from its `init`), and only messages that go through Hydrogen's log (every `[HYDROGEN]` warning). Your own `warn()` calls are not captured in a game.
+- **Warnings** are captured only while `Hydrogen.Debug` runs in an app on that side (from its `init`): every warn and error line that goes through `Hydrogen.Log`, so every `[HYDROGEN]` warning and your loggers' `log:warn` / `log:error` lines, each with its `level` (errors show red). Plain `warn()` calls are not captured in a game.
 
 ## Recipes
 
-Staff from your own list, or a role system:
+Staff from Hydrogen.Guards roles (no configure needed; the same roles can gate Commands):
+
+```luau
+Hydrogen.Guards.defineRole("staff", Hydrogen.Guards.groupRank(1234567, 200))
+Hydrogen.Guards.definePermission("debug", { "staff" })
+```
+
+Gate the overlay on a Hydrogen.Config flag:
+
+```luau
+Hydrogen.Debug.configure({
+	authorize = function(player: Player): boolean
+		local flag = Hydrogen.Config.findFlag("DebugOverlay")
+		return flag ~= nil and flag:enabled(player) -- server-side; never yields
+	end,
+})
+```
+
+Staff from your own list, or another role system:
 
 ```luau
 Hydrogen.Debug.configure({
@@ -255,3 +273,6 @@ end)
 - [State](state.md): the State and Player tabs list every `Hydrogen.State`.
 - [Data](data.md) and [PlayerState](player-state.md): pass stores in `inspect` for the Player tab.
 - [Test harness](testing.md) and [Clock](clock.md): rates follow `Hydrogen.Clock`, the harness resets stats on close.
+- [Guards](guards.md): the default check lets in the Guards permission `"debug"`.
+- [Log](log.md): the Warnings tab shows every warn and error line from `Hydrogen.Log`, with its level.
+- [Config](config.md): gate the overlay on a feature flag through `authorize`.

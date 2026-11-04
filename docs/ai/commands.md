@@ -75,7 +75,7 @@ Server (server-only):
 - `Commands.execute(player: Player, text: string, output: ((kind: OutputKind, text: string) -> ())?): CommandResult`: runs a line as `player` with every check except the rate limit and length cap. **Yields** while the command yields. `output` gets each line as it's produced.
 - `Commands.list(player: Player?): { CommandInfo }`: the commands `player` may run, not hidden, sorted; every visible command when `player` is nil.
 - `Commands.can(player: Player, name: string): boolean`: whether `player` may run the command named or aliased `name`.
-- `Commands.refresh(player: Player?)`: sends one player (or everyone) their command list again. Call it after their permissions change.
+- `Commands.refresh(player: Player?)`: sends one player (or everyone) their command list again. Call it after permissions change that the default resolver can't see (your own resolver's data). `Guards.invalidate` and defining or removing a Guards role already refresh.
 
 Argument builders (each returns an `Arg`; `options.name` is the name shown in usage and errors):
 - `Commands.player(options?)`: one `Player`. Accepts a name or display name, whole or its start (`ali`), and `me`. Ambiguous or multiple matches are errors.
@@ -118,7 +118,7 @@ type CommandContext = {
 }
 type PermissionResolver = (player: Player, permission: string, command: string) -> boolean
 type CommandsOptions = {
-	permissions: PermissionResolver?, -- replaces the default
+	permissions: PermissionResolver?, -- replaces the default (admins, then Hydrogen.Guards, then Studio)
 	admins: { number }?,              -- UserIds the default resolver allows
 	studio: boolean?,                 -- default true: default resolver allows everyone in Studio (not test players)
 	rateLimit: { perSecond: number, burst: number? }?, -- default 3/s, burst 6
@@ -152,7 +152,7 @@ Built-ins: `help [command]` (aliases `commands`, `cmds`; everyone) and `kick <pl
 - **The server decides everything.** The client sends only the raw line. The server parses, checks the permission, then runs. A line over `maxLength` or beyond the rate limit is answered with an error and not parsed. Commands called with `execute` skip the rate limit and length cap.
 - **Line syntax.** Words split on spaces; `"double"` or `'single'` quotes group words. A leading `/` is ignored. Command names and aliases are case-insensitive.
 - **Argument order.** `text` and `rest` must be last. An optional argument whose word doesn't parse, with more arguments after it, is left out and the word goes to the next argument (`say [times] <message...>`: `say hi` works). The last argument never falls through: its error is reported.
-- **Permissions.** `permission = nil`: everyone. A string: asked of the resolver. A function: called with the player. The default resolver allows `admins` and, in Studio, everyone; never fake test players, so tests behave the same in Studio and under Lune. A resolver or check that errors denies and warns. Resolvers run for every command whenever a player's list is sent, so keep them fast and non-yielding.
+- **Permissions.** `permission = nil`: everyone. A string: asked of the resolver. A function: called with the player. The default resolver allows, in order: `admins`; then, when the game defined a `Hydrogen.Guards` permission with that name, `Guards.can(player, name)`, or else a Guards role with that name, `Guards.hasRole(player, name)`; then, in Studio, everyone (never fake test players, so tests behave the same in Studio and under Lune). Names Guards doesn't know fall through to the Studio rule. A resolver or check that errors denies and warns. Resolvers run for every command whenever a player's list is sent, so keep them fast and non-yielding; Guards caches each answer per player, so only a player's first check of a role can yield (a group rank or game pass lookup).
 - **Errors in `run`.** `ctx:fail(msg)` sends `msg` as an error line. Any other error is warned on the server with a traceback; the caller sees `<name> failed with an error.` (plus the message in Studio).
 - **Output** goes only to the caller. Lines sent to a player who left are dropped silently. `run` may yield; the player may leave meanwhile.
 - **Built-ins** give way to a game command with the same name or alias; the built-in's other aliases still work. Turn them off with `configure({ help = false, kick = false })`.
@@ -163,15 +163,40 @@ Built-ins: `help [command]` (aliases `commands`, `cmds`; everyone) and `kick <pl
 
 ## Recipes
 
-### Plug in a role system (e.g. Hydrogen.Guards)
+### Permissions from Hydrogen.Guards roles (no configure needed)
+```luau
+-- A shared server module, required before app:start():
+Hydrogen.Guards.defineRole("admin", Hydrogen.Guards.groupRank(1234567, 250))
+Hydrogen.Guards.defineRole("mod", Hydrogen.Guards.userIds({ 111, 222 }), "admin") -- admins are mods too
+Hydrogen.Guards.definePermission("ban", { "mod" })
+
+Commands.register("ban", { permission = "ban", args = { Commands.player() }, run = function(ctx, target: Player) end })
+Commands.register("shutdown", { permission = "admin", run = function(ctx) end }) -- a role name works too
+
+-- Roles granted at runtime: re-ask Guards. This also resends the player's command list.
+Hydrogen.Guards.invalidate(player)
+```
+
+### Plug in another role system
 ```luau
 Hydrogen.Commands.configure({
 	permissions = function(player: Player, permission: string, _command: string): boolean
-		return Roles.has(player, permission) -- permission is the spec's string, e.g. "admin"
+		return MyRoles.has(player, permission) -- permission is the spec's string, e.g. "admin"
 	end,
 })
 -- when a player's roles change:
 Hydrogen.Commands.refresh(player)
+```
+
+### Gate commands on a Hydrogen.Config flag
+```luau
+local flag = Hydrogen.Config.findFlag("Commands") -- nil if the game didn't declare it
+Commands.register("fly", {
+	permission = function(player: Player): boolean
+		return flag == nil or flag:enabled(player) -- server-side; never yields
+	end,
+	run = function(ctx) end,
+})
 ```
 
 ### Arguments with defaults and the rest of the line
@@ -321,4 +346,6 @@ What players see (`CommandResult.status` in brackets): `Unknown command "x". Did
 - `scope.md`: `Scope.of(self):add(Commands.register(...))` for commands that live as long as a system or round.
 - `testing.md`: `Hydrogen.test`, `t:as`, `t:advance`, `t:expectWarning`.
 - `clock.md`: the rate limit reads `Hydrogen.Clock`.
-- A role registry (Hydrogen.Guards): plug in through `configure({ permissions = ... })` and call `refresh` on role changes.
+- `guards.md`: the default resolver asks Guards permissions and roles by the spec's `permission` name, and `Guards.invalidate` resends command lists.
+- `config.md`: a `permission` function can read a feature flag (`flag:enabled(player)`).
+- `debug.md`: the overlay's default check lets in the Guards permission `"debug"`, so one role setup covers both.

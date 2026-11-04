@@ -92,7 +92,7 @@ Guards.gamePass(passId: number): RoleResolver                     -- YIELDS firs
 Guards.hasRole(player: Player, role: string): boolean             -- YIELDS on first check per player+role, then cached
 Guards.can(player: Player, permission: string): boolean           -- YIELDS like hasRole
 Guards.rolesOf(player: Player): { string }                        -- every defined role held, sorted; YIELDS like hasRole
-Guards.invalidate(player: Player?): ()                            -- drop cached answers (one player, or everyone)
+Guards.invalidate(player: Player?): ()                            -- drop cached answers (one player, or everyone); resends Hydrogen.Commands lists
 Guards.role(name: string, options: GuardOptions?): Guard
 Guards.permission(name: string, options: GuardOptions?): Guard
 
@@ -288,3 +288,8 @@ end)
 ## Works with
 
 `middleware.md` (ordering, `DROP`, `rateLimit`), `network.md`, `receipts.md` (`owns` behind `Guards.gamePass`), `testing.md` (`t:advance`, `t:as`, expectations), `clock.md`.
+
+- `commands.md`: a command's `permission = "name"` is answered by `Guards.can` when you defined a permission with that name, or `Guards.hasRole` for a role with that name. `Guards.invalidate(player)` (and defining or removing a role) resends command lists, so `help` and autocomplete stay right.
+- `debug.md`: define the permission `"debug"` (`Guards.definePermission("debug", { "staff" })`) to let those players open the overlay's server data in live servers.
+- `character.md` / character hooks: range checks read `player.Character`, which the harness's `t:spawnCharacter` sets, so range guards work in tests with fake characters.
+- `config.md`: a Config segment can be a role (`segments = { Staff = function(player) return Guards.hasRole(player, "staff") end }`); call `Config.reevaluate(player)` after `Guards.invalidate(player)`.

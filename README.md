@@ -68,7 +68,7 @@ Hydrogen.test           -- one call per test: loopback, fake clock, app, fakes, 
 Hydrogen.harness        -- the same harness for frameworks with setup/teardown hooks
 Hydrogen.Clock          -- time for systems and tests: Clock.now(), wait, delay, heartbeat, fake()
 Hydrogen.gt             -- GreenTea, for writing schemas
-Hydrogen.Scope          -- cleanup tied to lifetimes: Scope.new(), Scope.of(system, player?)
+Hydrogen.Scope          -- cleanup tied to lifetimes: Scope.new(), Scope.of(system, player or character?)
 Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Data.store, Data.memory
 Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
@@ -1582,6 +1582,7 @@ Rules:
 - **One rule for when an object exists.** Tags, parents, streaming, children and attributes all feed the same check. "Exists while all conditions hold, new object every time" covers churn, streaming and partial loads without special cases. Re-checking from scratch on every signal makes deferred signal ordering irrelevant.
 - **Warn, don't give up.** A missing child is usually a slow stream or a broken template. Warning after the timeout points at the problem, and waiting on means a late arrival still works.
 - **Polling in tests.** Lune's Instances have no signals, and Studio's are deferred. Re-checking on `t:advance` makes component tests deterministic in both, while a game pays only for signals.
+
 ### Input
 
 `Hydrogen.Input` maps keys to actions on the client. You declare each action once, with its bindings for keyboard and mouse, gamepad and touch. Game code then reacts to `Jump` or `Move`, never to `Enum.KeyCode.Space`.
@@ -1606,18 +1607,6 @@ return {
 	Aim = Gameplay:vector2("Aim", { Enum.UserInputType.MouseMovement, Key.Thumbstick2 }),
 	Zoom = Gameplay:axis("Zoom", { Enum.UserInputType.MouseWheel, { positive = Key.I, negative = Key.O } }),
 	Close = Menu:button("Close", { Key.Backspace, Key.ButtonB }),
-### Guards
-
-`Hydrogen.rateLimit` limits how much a player sends. `Hydrogen.Guards` enforces game rules on what they send: cooldowns, roles and permissions, range checks and your own predicates. Each guard is an ordinary middleware, so it goes on an object with `:Use()` or `:UseRequest()`, or on everything with `Hydrogen.useMiddleware`. A rejected event is dropped. A rejected function request errors back to the client with the reason.
-
-```luau
--- ReplicatedStorage/Network/Combat.luau (shared)
-local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
-local gt = Hydrogen.gt
-
-return {
-	Fireball = Hydrogen.clientEvent("Fireball", gt.Vector3()),
-	Ban = Hydrogen.clientFunction("Ban", gt.args(gt.number()), gt.returns(gt.boolean())),
 }
 ```
 
@@ -1773,6 +1762,23 @@ end)
 - **Saved bindings are a diff, as plain data.** Saving only what the player changed means fixing a default reaches everyone who didn't rebind it. Names instead of EnumItems fit in a DataStore as they are.
 - **Touch buttons are made on first touch.** Keyboard and gamepad players never pay for them. The default grid is one line of code, `touchButton()` gives access to the made button, and `bindButton` / `source` give full control.
 - **No per-frame work when idle.** Keys are routed when they change, through a per-key cache cleared on context or binding changes. The only frame callback runs while the mouse is moving, to clear deltas.
+
+### Guards
+
+`Hydrogen.rateLimit` limits how much a player sends. `Hydrogen.Guards` enforces game rules on what they send: cooldowns, roles and permissions, range checks and your own predicates. Each guard is an ordinary middleware, so it goes on an object with `:Use()` or `:UseRequest()`, or on everything with `Hydrogen.useMiddleware`. A rejected event is dropped. A rejected function request errors back to the client with the reason.
+
+```luau
+-- ReplicatedStorage/Network/Combat.luau (shared)
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local gt = Hydrogen.gt
+
+return {
+	Fireball = Hydrogen.clientEvent("Fireball", gt.Vector3()),
+	Ban = Hydrogen.clientFunction("Ban", gt.args(gt.number()), gt.returns(gt.boolean())),
+}
+```
+
+```luau
 -- ServerScriptService/Systems/Combat.luau
 local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
 local Combat = require(ReplicatedStorage.Network.Combat)
@@ -1891,6 +1897,7 @@ Guards.resetConfiguration()
 - **Cooldowns are used last, and all at once.** Every other check runs first. Then every cooldown is checked and used in one step that can't yield, so a failing role check costs nothing and two messages can't take the last charge.
 - **Fail closed.** A predicate or resolver that errors denies the message, and a role answer that couldn't be worked out isn't cached.
 - **Cheap on hot paths.** A cooldown is one number per player. A cached role check is two table lookups. Nothing allocates per message unless it's rejected. Leave tracking starts the first time a guard stores something for a player, so a game that never uses Guards pays nothing.
+
 ### Commands
 
 `Hydrogen.Commands` gives the game in-game commands: `give me sword 5`, `kick bob`, `/team red`. Each system registers its commands next to its own code. The server parses the arguments, checks permissions and runs the command, and the output goes back to whoever typed it. On the client there's an optional console (F2, or a button on touch screens) with history and autocomplete, and every command also works from the chat bar.
@@ -1940,7 +1947,16 @@ give a sword 5       -> Bad argument 1 (player) for give: "a" matches Alice, Ala
 
 Arguments can be any GreenTea schema, or one of the built-in types: `Commands.player()`, `Commands.players()` (adds `all`, `others` and `me,bob` lists), `Commands.number({ min, max, integer })`, `Commands.integer()`, `Commands.string()`, `Commands.boolean()`, `Commands.enum({ "easy", "hard" })` (or a Roblox `Enum`), and `Commands.text()` for the rest of the line. Wrap one in `Commands.optional(arg, default)`, `Commands.rest(arg)` (every remaining word, as a list) or `Commands.named("count", arg)`, or make your own with `Commands.arg({ name, parse })`. Inside `run`, `ctx:reply(text)` sends a line and `ctx:fail(text)` sends an error and stops.
 
-Permissions are pluggable. A command's `permission` is a string your resolver checks, or a function of the player. By default, the UserIds in `admins` hold every permission, and in Studio everyone does. To use a role system:
+Permissions are pluggable. A command's `permission` is a string your resolver checks, or a function of the player. By default, the UserIds in `admins` hold every permission; then, if you defined a `Hydrogen.Guards` permission or role with that name, Guards answers; and in Studio everyone holds every permission. So with Guards there's nothing to configure:
+
+```luau
+Hydrogen.Guards.defineRole("mod", Hydrogen.Guards.groupRank(1234567, 200))
+Hydrogen.Guards.definePermission("ban", { "mod" })
+Hydrogen.Commands.register("ban", { permission = "ban", args = { Hydrogen.Commands.player() }, run = function(ctx, target) end })
+Hydrogen.Guards.invalidate(player) -- after granting roles at runtime; also resends the player's command list
+```
+
+To use another role system:
 
 ```luau
 Hydrogen.Commands.configure({
@@ -2109,7 +2125,7 @@ Rules:
 
 - **Add `Hydrogen.Debug` on both sides before `app:start()`.** It registers one network function, `Hydrogen/Debug`, which both sides need. Stats alone need no system.
 - **Nothing runs until it's used.** Until stats are enabled or someone opens the overlay, no middleware or observer is installed, so the network does no extra work. An authorized request turns server stats on for 10 seconds, and each refresh renews that. The open overlay keeps this client's stats on until 3 seconds after it closes. `enableStats()` keeps them on until `disableStats()`.
-- **Only authorized players get server data.** By default that's anyone in Studio, the owner of a user-owned game, and the UserIds in `users`. `authorize = function(player) ... end` replaces that check entirely, for staff lists or roles. An `authorize` that errors denies and warns. Unauthorized players get `nil`, and their request does no other work. Outside Studio, the panel opens only after the server answers, so for everyone else the key does nothing.
+- **Only authorized players get server data.** By default that's anyone in Studio, the owner of a user-owned game, the UserIds in `users`, and, if you define the `Hydrogen.Guards` permission `"debug"`, players who have it. `authorize = function(player) ... end` replaces that check entirely, for staff lists or roles. An `authorize` that errors denies and warns. Unauthorized players get `nil`, and their request does no other work. Outside Studio, the panel opens only after the server answers, so for everyone else the key does nothing.
 - **Read-only.** The server sends formatted text, never live tables, so nothing in the panel can change game state.
 - **Bytes are estimates** of the plain values: 9 bytes for Hydrogen's id, then 9 per number, a string's length plus 4, 2 per boolean, 4 per table plus its contents (full list in `docs/ai/debug.md`). After 256 values in one message, each further value counts as a number, which keeps the estimate cheap. `:Encode()` objects send less than estimated.
 - **Dropped** counts events and requests that arrived but never reached a listener or handler: rate-limited, dropped by middleware or failing the schema. A server event sent to three players counts three messages out.
@@ -2147,8 +2163,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 224 | Passed: 224` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
-Expected output ends with `Tests Ran: 213 | Passed: 213` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 467 | Passed: 467` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -2208,6 +2223,24 @@ src/
   Component/
     init.luau          Component.new: options, per-instance entries, construct/destroy, lookups
     Source.luau        where tag changes come from: CollectionService signals, or polling under a fake clock
+  Input/
+    init.luau          Hydrogen.Input: actions, contexts, bindings, saving, glyphs, the public API
+    Core.luau          the engine: contexts and actions, routing keys to actions by priority, held state
+    Device.luau        UserInputService events as key names; the current device
+    Keys.luau          key names, binding parsing and display
+    Touch.luau         on-screen touch buttons, made on first touch input
+    Types.luau         Action, Context, Binding, Device and Glyph types
+  Commands/
+    init.luau          Hydrogen.Commands (server system) and Commands.Client; register, configure, execute
+    Server.luau        registry, permissions (admins, Guards, Studio), rate limit, the parse-and-run pipeline
+    Client.luau        sends lines, keeps the command list, output and autocomplete on the client
+    Args.luau          argument types: built-ins and GreenTea schemas
+    Builtins.luau      help and kick
+    Complete.luau      autocomplete from the command list
+    Console.luau       the in-game console UI (verified in Studio; not drawn headless)
+    TextChat.luau      TextChatService chat commands
+    Types.luau         public types
+    Wire.luau          the network objects, registered by the systems' init
   Guards/
     init.luau          public API: guard constructors, all/any, role and range helpers, configure
     Guard.luau         guards as middleware: specs, rejection (DROP or error), onReject hooks, atomic cooldown use
@@ -2247,6 +2280,7 @@ test/
   Log.luau             Hydrogen.Log: levels, laziness, sinks, rate limiting, harness capture, Log.warn compatibility
   Character.luau       character hooks, the Definition.hooks extension point, and used systems being added
   Signal.luau  Scheduler.luau
+  Input.luau  Commands.luau
   Component.luau       Hydrogen.Component under Hydrogen.test (polling), and through CollectionService signals on a fake world
   Guards.luau          Hydrogen.Guards as middleware under Hydrogen.test
   Config.luau          Hydrogen.Config under Hydrogen.test: environments, rollouts, replication, live sources
