@@ -13,6 +13,7 @@ local State = require("./State")
 local Character = require("./Character")
 local Input = require("./Input")
 local Config = require("./Config")
+local Debug = require("./Debug")
 local Expect = require("@self/Expect")
 
 export type Expectation = Expect.Expectation
@@ -450,6 +451,8 @@ function Testing.harness(options: TestOptions?): Harness
 		step(Input.reset)
 		-- Overrides, live values and flag results too.
 		step(Config.reset)
+		-- Debug stats chain the observer below; stop them first so it can be removed.
+		step(Debug._reset)
 		if Runtime.Observer == record then
 			Runtime.Observer = nil
 		end

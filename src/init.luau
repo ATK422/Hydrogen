@@ -17,6 +17,7 @@ local Input = require("@self/Input")
 local Guards = require("@self/Guards")
 local Commands = require("@self/Commands")
 local Config = require("@self/Config")
+local Debug = require("@self/Debug")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -134,6 +135,15 @@ export type ConfigSegment = Config.Segment
 export type ConfigEnvironment = Config.Environment
 export type ConfigSource = Config.Source
 export type MemoryConfigSource = Config.MemorySource
+export type DebugOptions = Debug.Options
+export type NetStat = Debug.NetStat
+export type NetLatency = Debug.Latency
+export type DebugView = Debug.View
+export type DebugPlayerView = Debug.PlayerView
+export type DebugRow = Debug.Row
+export type BootReport = Debug.BootReport
+export type DebugWarning = Debug.Warning
+export type DebugInspectable = Debug.Inspectable
 
 return {
 	App = App,
@@ -198,4 +208,6 @@ return {
 	Commands = Commands,
 	-- Typed config and feature flags: Config.define(name, { values, flags, environments, source }).
 	Config = Config,
+	-- Kit: network stats (Debug.stats()) and a developer overlay. Add it to the app on both sides for the overlay.
+	Debug = Debug,
 }
