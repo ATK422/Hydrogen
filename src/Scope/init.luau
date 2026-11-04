@@ -40,8 +40,8 @@ type Internal = {
 	_parent: Internal?,
 }
 
--- Finds the scope an app keeps for a system (and player). Returns nil and a reason when it can't.
-type Owner = (system: any, player: Player?) -> (Scope?, string?)
+-- Finds the scope an app keeps for a system (and player or character). Returns nil and a reason when it can't.
+type Owner = (system: any, subject: any?) -> (Scope?, string?)
 
 local Methods = {}
 local metatable = { __index = Methods }
@@ -287,18 +287,19 @@ function Scope.new(name: string?): Scope
 	return new(name)
 end
 
--- The scope an app keeps for a system, or for a player within that system. The system scope
--- is destroyed on app:stop() right after the system's stop hook. A player scope is destroyed
--- right after the system's playerRemoving for that player, so in reverse dependency order.
+-- The scope an app keeps for a system, or for a player or character within that system. The
+-- system scope is destroyed on app:stop() right after the system's stop hook. A player scope is
+-- destroyed right after the system's playerRemoving for that player, so in reverse dependency
+-- order, and a character scope right after the system's characterRemoving for it.
 -- Once that has happened you get a destroyed scope, which cleans anything added straight away.
-function Scope.of(system: any, player: Player?): Scope
+function Scope.of(system: any, subject: Instance?): Scope
 	local owner = owners[system]
 	if owner == nil then
 		local name = if type(system) == "table" and type(system.id) == "string" then system.id else tostring(system)
 		error(`[HYDROGEN] Scope.of: {name} isn't running in an app. Ask for its scope from init or later`, 2)
 	end
 
-	local scope, problem = owner(system, player)
+	local scope, problem = owner(system, subject)
 	if scope == nil then
 		error(`[HYDROGEN] Scope.of: {problem}`, 2)
 	end

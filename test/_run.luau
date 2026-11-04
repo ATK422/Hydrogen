@@ -21,6 +21,7 @@ require("./PlayerState")()
 require("./State")()
 require("./Receipts")()
 require("./Log")()
+require("./Character")()
 
 local frktest = require("@pkg/frktest")
 local console_reporter = frktest.reporters.console_reporter

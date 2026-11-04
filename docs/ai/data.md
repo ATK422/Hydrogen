@@ -309,7 +309,7 @@ local data = PlayerData:view(userId) -- yields; nil if never saved; does not loc
 - Don't mutate `PlayerData:get(player)` (`data.coins += 1`): it is frozen and errors. Do use `PlayerData:update(player, function(data) data.coins += 1 return nil end)`.
 - Don't call `task.wait`, `:InvokeClient` or a DataStore inside an update callback. Do the yielding work first, then call `update` with the result.
 - Don't connect `Players.PlayerAdded` and read data there. Do read it in the `playerAdded` of a system that `use`s the store, or call `waitForLoad`.
-- Don't forget to add the store to the app (`addSystem` / `addSystemsFolders`). Otherwise nothing loads and `use` warns that the dependency was not added.
+- Don't rely on a store nobody `use`s being loaded. A store a system `use`s is added to the app for you; one you only `require` must be added yourself (`addSystem` / `addSystemsFolders`), or nothing loads.
 - Don't grant purchases with `update` + `save`. Do use `updateOnce(player, receipt.PurchaseId, fn)`: it records the id in the same commit and dedupes across servers.
 - Don't treat `"failed"` from `updateOnce` as granted. Do return `NotProcessedYet`; Roblox retries and the next call answers `"duplicate"` once stored.
 - Don't change two players with two `update` calls for a trade. Do use `transaction`, so a crash can't store one side.

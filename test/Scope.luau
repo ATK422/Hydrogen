@@ -376,7 +376,7 @@ return function()
 
 			-- Plain never asked, so nothing was created for it.
 			check.equal((app :: any)._scopes[Plain], nil)
-			check.equal((app :: any)._players[player].scopes[Plain], nil)
+			check.equal((app :: any):_find(player).scopes[Plain], nil)
 
 			app:_removePlayer(player)
 			check.equal(seen.removing, seen.added)

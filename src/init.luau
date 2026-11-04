@@ -9,6 +9,7 @@ local PlayerState = require("@self/PlayerState")
 local State = require("@self/State")
 local Receipts = require("@self/Receipts")
 local Log = require("@self/Log")
+local Character = require("@self/Character")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -122,4 +123,6 @@ return {
 	Receipts = Receipts,
 	-- Tagged, levelled, structured logging: Log.of(system or name, player?), levels, sinks.
 	Log = Log.api,
+	-- characterAdded / characterRemoving are system hooks; this holds the test helpers for fake characters.
+	Character = Character,
 }

@@ -1,6 +1,6 @@
 # Hydrogen systems (`Hydrogen.define`)
 
-> A system is a ModuleScript that returns `Hydrogen.define(...)`: a singleton with optional lifecycle hooks (`init`, `start`, `playerAdded`, `playerRemoving`, `stop`) that Hydrogen runs in dependency order. Every piece of game logic in a Hydrogen game is a system.
+> A system is a ModuleScript that returns `Hydrogen.define(...)`: a singleton with optional lifecycle hooks (`init`, `start`, `playerAdded`, `playerRemoving`, `characterAdded`, `characterRemoving`, `stop`) that Hydrogen runs in dependency order. Every piece of game logic in a Hydrogen game is a system.
 
 ## Use it when / Don't use it when
 
@@ -70,6 +70,8 @@ end)
 | `system:start()` | Optional. Runs after every `init` and after the network starts. The client yields for the network before this. |
 | `system:playerAdded(player: Player)` | Optional. Runs in dependency order, for players already present and for later joins. Runs on the client too, for every player. |
 | `system:playerRemoving(player: Player)` | Optional. Runs in **reverse** dependency order. |
+| `system:characterAdded(player: Player, character: Model)` | Optional. Runs in dependency order for each character, after that player's `playerAdded` hooks. Server and client. See `character.md`. |
+| `system:characterRemoving(player: Player, character: Model)` | Optional. Reverse dependency order, before that player's `playerRemoving`. See `character.md`. |
 | `system:stop()` | Optional. Runs in reverse dependency order on `app:stop()`, which the server binds to `BindToClose`. |
 
 Types: `Hydrogen.Defined<T>` (a system with its hooks), `Hydrogen.System<T>` (without them), `Hydrogen.Lifecycle`.
@@ -86,7 +88,8 @@ Types: `Hydrogen.Defined<T>` (a system with its hooks), `Hydrogen.System<T>` (wi
 - `playerRemoving` waits for that player's `playerAdded` hooks to finish. Each system sees `playerAdded` exactly once, then `playerRemoving` exactly once.
 - `stop` first runs `playerRemoving` for every remaining player, waits for all of them to return, then runs the `stop` hooks.
 - A system added after `app:start()` gets `init`, `start` and then `playerAdded` for players already in the game.
-- Every system you `use` must also be added to the same app. Otherwise Hydrogen warns.
+- A system you `use` is added to the app for you at `app:start()` (or with the system, when it's added after start) if you didn't add it, and boots first. With `debug = true` the app prints `[HYDROGEN] Added <Y>: <X> uses it`. A system replaced with `app:replace` doesn't bring its own dependencies: the fake stands in for it.
+- `characterAdded` / `characterRemoving` follow the same guarantees as the player hooks, per character (see `character.md`).
 - Messages name systems by their module's full name (e.g. `ServerScriptService.Lobby.Systems.Data`), so two systems with the same name can be told apart.
 
 ## Recipes
@@ -143,6 +146,7 @@ end
 - Don't call another system's runtime state from `init`, because it may not have run yet. Wait until `start` or a player hook.
 - Don't connect `Players.PlayerAdded` / `PlayerRemoving` yourself. Use the hooks: they're ordered, they cover players already in the game, and they keep running after an error in another system.
 - Don't yield for a long time in `playerAdded` unless later systems need that work done first. Use `task.spawn` for work they don't depend on.
+- Don't connect `player.CharacterAdded` yourself. Define `characterAdded` / `characterRemoving` (see `character.md`).
 - Don't `table.freeze` a system table or lock its metatable, or it can't be replaced in tests.
 - Don't create cycles (`A` uses `B` uses `A`). Move the shared part into a third system.
 
@@ -154,15 +158,16 @@ Use `app:replace(original, fake)` to swap a dependency, and `Hydrogen.loopback()
 
 | Message | Meaning and fix |
 | --- | --- |
-| `[HYDROGEN] System X depends on system Y which was not added to the app` | Add `Y` to the app (`addSystem`, or a folder passed to `addSystemsFolders`). |
+| `[HYDROGEN] System X depends on system Y which was not added to the app` | Only for a system replaced with `app:replace`: the fake stands in for `X`, so `X`'s dependencies aren't added. Add `Y` yourself if something else needs it, or ignore it in tests. Used systems are otherwise added for you. |
 | `[HYDROGEN] Cyclic system dependency: A -> B -> A` | Break the cycle; move the shared logic into a third system. |
 | `[HYDROGEN] System <name> failed in init/start: ...` | Your hook errored and the boot stopped. Fix the error shown in the traceback. |
-| `[HYDROGEN] playerAdded/playerRemoving/stop failed in system <name>: ...` | Your hook errored. The other systems still ran. |
+| `[HYDROGEN] playerAdded/playerRemoving/characterAdded/characterRemoving/stop failed in system <name>: ...` | Your hook errored. The other systems still ran. |
 | `[HYDROGEN] define(id, constructor) needs a non-empty id and a constructor function` | Wrong arguments to `define`. |
 | `[HYDROGEN] Tried to collect "system" but it was not a valid system: <path>` | A ModuleScript in a systems folder doesn't return `Hydrogen.define(...)`. Move it out, or define it as a system. |
 
 ## Works with
 
 - `app.md`: adding systems and booting.
+- `character.md`: the character hooks and per-character scopes.
 - `network.md`: listeners are registered from `start`.
 - The kit modules (`data.md`, `player-state.md`, `state.md`, `scope.md`, `receipts.md`) are systems or factories for systems. `use` them like any other system.
