@@ -28,6 +28,10 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 - The kit modules work together: PlayerState replicates each field through a `Hydrogen.State` per-player value (`State/<name>/<field>`), and its client view reads State live. Data, Scope, State and Receipts read time through `Hydrogen.Clock` and warn through Hydrogen's log, so `Hydrogen.test`'s fake clock and warning capture reach them. `Hydrogen.test` resets State when it closes.
 - Agent docs: `llms.txt` and `docs/ai/*.md`, one file per API area in a fixed layout, plus `AGENTS.md` for agents working on Hydrogen. They ship in the package.
 - `tools/create-hydrogen`: `pesde x atk422/create_hydrogen` scaffolds a new game with git, Rojo, Rokit, pesde, Hydrogen, an example system and test, and agent docs.
+- `Hydrogen.Config`: typed configuration and feature flags, declared once in a shared module with `Config.define(name, { values, flags, segments, environments, source, refresh })`. `Config.value(schema, default)` values are server-only and never replicated; `Config.shared` values are sent to clients. Reads are plain table lookups (`GameConfig.values.RoundLength`), updated in place, with `observe` for changes. Overrides per environment (`studio`, `private`, `reserved`, `live`) and per place id, plus `override` / `clearOverrides` from code on the server. Every declaration and environment table is checked at definition with a `[HYDROGEN]` error.
+- Feature flags: `Config.flag(true | false | rule)` with `enabled`, `percent` (deterministic UserId hash, stable as it grows), `users`, `groups`, named `segments` (`users`, `groups` with `minRank`, or a function) and custom `when` checks. Evaluated on the server per player at join (group ranks looked up in parallel, at most 5 s) and again when a rule changes or on `Config.reevaluate(player)`. `flag:enabled(player)`, `flag:observe(player, fn)`, `Config.getFlag(name)` / `findFlag(name)`. Each player's enabled flags replicate to that player only, through `Hydrogen.State`.
+- Live config sources: `Config.experienceConfigs()` (Roblox Experience Configs, refreshed on `UpdateAvailable`), `Config.dataStore(name, { key, topic })` (polling plus an optional MessagingService topic) and `Config.memory()` for tests, behind a one-method source interface. Fetched at start and every `refresh` seconds on `Hydrogen.Clock`; each remote value is validated on its own and the last good value kept when one is rejected or a fetch fails. `Config.useEnvironment` and `Config.reset` for tests; `Hydrogen.test` resets Config when it closes.
+- Types: `Config<V, F>`, `ConfigSpec<V, F>`, `Flag`, `FlagRule`, `ConfigSegment`, `ConfigEnvironment`, `ConfigSource`, `MemoryConfigSource`.
 
 ### Changed
 
@@ -38,6 +42,7 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 
 ### Fixed
 
+- `State.reset()` (and so `Hydrogen.test` closing) no longer leaves State unable to replicate when a test ended before its end-of-frame send ran.
 - `Hydrogen.rateLimit` no longer locks a player out when the clock it reads moves backwards (e.g. a bucket made before a test's fake clock was installed).
 
 ## 0.4.0

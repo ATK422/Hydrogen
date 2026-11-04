@@ -73,9 +73,10 @@ Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Da
 Hydrogen.PlayerState    -- per-player state from Data or runtime, replicated per field
 Hydrogen.State          -- replicated state: value, map, list, playerValue, playerMap, playerList, computed
 Hydrogen.Receipts       -- kit: routes ProcessReceipt and grants each purchase once; add it to the app
+Hydrogen.Config         -- typed config and feature flags: Config.define, value, shared, flag; add it to the app
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Config: `Hydrogen.Config<V, F>`, `Hydrogen.ConfigSpec<V, F>`, `Hydrogen.Flag`, `Hydrogen.FlagRule`, `Hydrogen.ConfigSegment`, `Hydrogen.ConfigEnvironment`, `Hydrogen.ConfigSource` and `Hydrogen.MemoryConfigSource`.
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
 
@@ -1201,6 +1202,89 @@ To fake Receipts itself in a system's test, use `app:replace(Hydrogen.Receipts, 
 - **Waiting, not refusing, while the player loads.** Pending receipts are offered as the player joins, exactly when their data is still loading. Refusing them would leave the purchase until the player's next visit.
 - **One receipt per player at a time.** Grants for the same player can't interleave with each other's saves, so the reasoning above holds for each receipt.
 
+### Config and feature flags
+
+`Hydrogen.Config` holds your game's tunable values and feature flags. Declare them once in a shared module. Read values as plain table lookups, turn features on for some players, override anything per environment, and optionally take live values from Roblox Experience Configs without a deploy.
+
+```luau
+-- ReplicatedStorage/Shared/GameConfig.luau (required on both sides before app:start)
+local Config, gt = Hydrogen.Config, Hydrogen.gt
+
+return Config.define("Game", {
+	values = {
+		RoundLength = Config.value(gt.number(), 180),                   -- server only (the default)
+		WebhookUrl = Config.value(gt.string(), ""),                     -- server only; fill it from ServerStorage
+		MaxCoins = Config.shared(gt.number({ integer = true }), 1000),  -- replicated to clients
+	},
+	segments = {
+		Staff = { groups = { 1234567 }, minRank = 200 },
+	},
+	flags = {
+		NewShop = Config.flag({ percent = 10, segments = { "Staff" } }), -- 10% of players, plus staff
+		Holiday = Config.flag(false),
+	},
+	environments = {
+		studio = { RoundLength = 20, Holiday = true },
+		private = { RoundLength = 60 },
+		places = { [123456789] = { MaxCoins = 5000 } },
+	},
+	source = Config.experienceConfigs(), -- optional live values
+})
+```
+
+```luau
+-- server boot: the config is a system
+app:addSystem(GameConfig)
+
+-- a server system (use(GameConfig) so flags are evaluated before its playerAdded)
+if GameConfig.flags.NewShop:enabled(player) then ... end
+local length = GameConfig.values.RoundLength
+GameConfig:observe("RoundLength", function(seconds) timer:setLength(seconds) end)
+
+-- client
+GameConfig.flags.NewShop:observe(Players.LocalPlayer, function(enabled)
+	shopButton.Visible = enabled
+end)
+print(GameConfig.values.MaxCoins) -- shared values only; RoundLength errors here
+```
+
+| Declare | What it is |
+| --- | --- |
+| `Config.value(schema, default)` | A value only the server can read. It is never sent to clients. |
+| `Config.shared(schema, default)` | A value the server sends to every client. |
+| `Config.flag(true \| false \| rule)` | A feature flag. A rule has `enabled` (a kill switch), `percent` (0 to 100), `users` (UserIds), `groups` (group ids), `segments` (names) and `when` (a custom check, `function(player) -> boolean`). It is on for a player who matches any of them, and on for everyone when it has none. |
+| `segments = { Name = ... }` | A named group of players: `{ users, groups, minRank, when }` or a function. |
+| `environments = { studio, private, reserved, live, places }` | Overrides for the matching environment, and per place id on top of that. |
+| `source = Config.experienceConfigs() \| Config.dataStore(name, { topic }) \| Config.memory()` | Live values, fetched every `refresh` seconds (default 60) and when the source pushes. |
+
+On the server, `GameConfig:override({ Name = value })` sets values or flag rules from code, above everything else, and `clearOverrides()` removes them. `Config.reevaluate(player)` evaluates flags again after something a `when` check reads has changed. `Config.getFlag(name)` and `Config.findFlag(name)` find a flag by name, for libraries that gate on a flag the game declared.
+
+Rules worth knowing:
+
+- **Values are layered.** From highest to lowest: `override`, then the live source, then `places[placeId]`, then the environment kind, then the declared default. The kind is `studio` in Studio, `private` on a private (VIP) server, `reserved` on a reserved server, and `live` everywhere else. Every environment table is checked when the config is defined, including the ones this server doesn't use, so a typo or a wrong type fails at boot with a `[HYDROGEN]` error.
+- **Server-only is the default, and the shared module is public.** `Config.value` is never sent, and reading it on a client errors. A ModuleScript in ReplicatedStorage is downloaded by every client, though, so never write a real secret as a default. Supply it with `override` from a ServerStorage module, or from a live source.
+- **Reads are plain table lookups** on a table that is updated in place when a value changes. Read `GameConfig.values.X` when you use it, or `observe` it; a copy kept in a local doesn't follow live changes. Unknown names error, assignments error, and tables are frozen.
+- **Add the config to the app on the server.** As a system, it sends shared values to clients, evaluates every player's flags as they join (before the `playerAdded` of systems that `use` it), looks up group ranks and runs the live source. If you forget, a warning says so once the network is running.
+- **Flags are evaluated on the server**, once per player, and again when a rule changes, when group lookups finish or when you call `Config.reevaluate`. A percentage hashes the flag's name with the UserId, so the answer is the same on every server, players already in stay in as the percentage grows, and different flags pick different players. Group ranks are looked up when a player joins, all at once, for at most 5 seconds. `when` checks must not yield; one that errors or yields counts as false, with a warning.
+- **Clients see only their own flags**, and only the ones that are on. Flags and shared values reach a joining client in the ready handshake, before client systems start.
+- **Live values are checked like code.** Each value is validated against its schema, and each flag rule compiled, on its own. A bad one is rejected with a warning and the last good value kept. A missing one falls back to the lower layers, and a failed fetch keeps everything. `app:stop()` stops refreshing.
+- **Tests:** `Config.useEnvironment({ kind = "studio" })` pretends to be elsewhere, `override` forces a value or flag, and `Config.memory()` is a source you can `set`, `push` and `fail`. Refreshes run on `Hydrogen.Clock`, so `t:advance(seconds)` drives them. `Hydrogen.test` resets Config when it closes. Under loopback, read what a client received with `t:as(player, GameConfig.replica, GameConfig)`.
+
+#### Live sources
+
+- **`Config.experienceConfigs()`** is the one to reach for. Experience Configs are edited in Studio (File > Open Configs) or on the Creator Hub, and published without a deploy. Each value or flag is the config key of the same name: a number, string or boolean, or a JSON object for a flag rule such as `{"percent": 25}`. Roblox pushes `UpdateAvailable` when a new version is published, so changes reach running servers in seconds to a minute. A scheduled refresh only reads the snapshot the server already has. Hydrogen uses the global snapshot; Roblox's own per-player targeting isn't used, because flags do that.
+- **`Config.dataStore(name, { key, topic })`** reads one DataStore key holding a table of values, with one `GetAsync` per server per refresh. With a `topic`, publishing any message to it over MessagingService makes every server fetch straight away.
+- **Your own source** is any table with `name` and `fetch(self, names) -> { [name]: value }`, plus an optional `subscribe(self, onUpdate) -> unsubscribe` for push.
+
+#### Why it's designed this way
+
+- **One declaration, typed reads.** `Config.value(schema, default)` returns the default's type, so `GameConfig.values.RoundLength` autocompletes as a `number` and a read is one table index. There are no string keys to mistype, and no getter on the hot path.
+- **Server-only by default.** Forgetting to mark something private shouldn't leak it. You opt in to replication per value, and the docs say plainly that a shared module's source is public anyway.
+- **Flags replicate through `Hydrogen.State`.** A flag's answer is per player, must reach that player only, must arrive before client systems start, and must update when a rule changes. That is exactly `State.playerMap` with owner-only visibility. Shared values are a `State.map`. Config writes nothing new on the wire, and tests get per-client replicas for free. Only flags that are on are sent, so clients don't learn which players are excluded.
+- **Evaluated on the server, cached per player.** Rules can name groups, which need a web call, and custom checks, which only make sense on the server. Evaluating once per player and on change makes `enabled` a table lookup, while percentages stay deterministic across servers with no stored assignments.
+- **Experience Configs as the default live source.** It is Roblox's own tool: it needs no Open Cloud key or admin UI, it pushes updates, and it keeps serving its last values through outages. DataStore polling remains for teams that already store config there, and the interface is one function for anything else.
+- **Per-value validation with last-good fallback.** One bad remote value shouldn't take a whole config down, and a bad deploy of config shouldn't take the game down. Each name is checked on its own, and nothing changes unless it passes.
+
 ---
 
 ## Part 2: Working on Hydrogen itself
@@ -1271,6 +1355,12 @@ src/
     FakeMarketplace.luau  stand-in MarketplaceService for tests
     Types.luau         Receipt, ReceiptStore, Marketplace, options
     Clock.luau  Log.luau  time sources and warnings, forwarding to Hydrogen.Clock and the log; tests can patch them
+  Config/
+    init.luau          public API and types
+    Define.luau        Config.define: layers, values tables, flag evaluation, live refresh, the system hooks
+    Rules.luau         flag rules and segments: checking, compiling, evaluating, the rollout hash
+    Environment.luau   which kind of server this is (studio, private, reserved, live) and the place id
+    Sources.luau       live sources: experienceConfigs, dataStore, memory
   Testing/
     init.luau          Hydrogen.test and Hydrogen.harness
     Expect.luau        expectations on deliveries, argument matching, failure messages
@@ -1283,6 +1373,7 @@ test/
   Data.luau  PlayerState.luau
   State.luau           Hydrogen.State end to end through loopback
   Receipts.luau        Hydrogen.Receipts with a fake marketplace, memory store and Data store
+  Config.luau          Hydrogen.Config under Hydrogen.test: environments, rollouts, replication, live sources
   Fixtures/            modules the suites require
 docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them
 default.project.json   Rojo project for development (see below)
