@@ -1,5 +1,5 @@
 # Hydrogen.Input
-> Client-side action mapping: declare actions (`Jump`, `Sprint`, `Move`, `Aim`) once with keyboard/mouse, gamepad and touch bindings, group them in prioritized contexts, and react to actions instead of keys; with rebinding, saved binding tables, device-aware glyphs, touch buttons and headless simulation.
+> Client-side action mapping: declare actions (`Jump`, `Sprint`, `Move`, `Aim`) once with keyboard/mouse, gamepad and touch bindings, group them in prioritized contexts, and react to actions instead of keys; with rebinding, saved binding tables, device-aware glyphs, touch buttons, input buffering for combos and headless simulation.
 
 ## Use it when / Don't use it when
 
@@ -8,7 +8,8 @@ Use it when:
 - the same action must work on keyboard/mouse, gamepad and touch;
 - some input is modal (menu, vehicle, dialog) and must take keys from gameplay while open;
 - players can rebind controls and you save their bindings;
-- prompts must show the right key or button for the device in use.
+- prompts must show the right key or button for the device in use;
+- a press during an attack's recovery must fire when the recovery ends instead of being lost (`buffer`).
 
 Don't use it when:
 - you are on the server: input only exists on the client (send a `Hydrogen.clientEvent` with the result);
@@ -79,7 +80,7 @@ Module: `local Input = Hydrogen.Input`. Client-only at runtime: on the server, d
 
 Definitions (call at module top level in a shared client module):
 - `Input.context(name: string, options: ContextOptions?): Context` with `ContextOptions = { priority: number? (0), sink: boolean? (false), enabled: boolean? (true) }`
-- `context:button(name: string, bindings: { Binding }, options: { touch: (boolean | TouchOptions)? }?): Action<boolean>`
+- `context:button(name: string, bindings: { Binding }, options: { touch: (boolean | TouchOptions)?, buffer: number? }?): Action<boolean>`: `buffer` = seconds a press stays usable for `consumeBuffered` (button only)
 - `context:axis(name: string, bindings: { Binding }, options: { deadzone: number? }?): Action<number>`
 - `context:vector2(name: string, bindings: { Binding }, options: { deadzone: number? }?): Action<Vector2>`
 - `Input.button / Input.axis / Input.vector2(name, bindings, options?)`: same, in `Input.default` (context `"Default"`, priority 0, enabled)
@@ -103,6 +104,7 @@ Bindings (`Binding = Key | BindingTable`, `Key = Enum.KeyCode | Enum.UserInputTy
 - `action:onEnded(fn: () -> ()): () -> ()`
 - `action:onChanged(fn: (value: V, previous: V) -> ()): () -> ()`: every change; fires before the onBegan or onEnded it causes
 - `action:onHold(seconds: number, fn: () -> ()): () -> ()`: once per press after `seconds` held (uses `Hydrogen.Clock`)
+- `action:consumeBuffered(): boolean`: button defined with `buffer` only (errors otherwise). True if a press began the action at most `buffer` seconds ago and no call has taken it yet; clears it either way. Client-only in effect (always false on the server). Fires nothing.
 - `action:bindings(device: ("keyboard" | "gamepad")?): { Binding }`
 - `action:rebind(binding: Binding, options: { slot: number?, conflict: ("reject" | "swap" | "unbind" | "allow")? }?): (boolean, { Conflict })`
 - `action:conflicts(binding: Binding, slot: number?): { Conflict }`
@@ -164,6 +166,11 @@ Types from `Hydrogen`: `InputAction<V>`, `InputContext`, `InputDevice`, `InputKe
 - Touch buttons: made on the first switch to `"touch"` (never for keyboard/gamepad players), in a `ScreenGui` "HydrogenTouch" (`ResetOnSpawn = false`); visible while the device is touch and their context is enabled. `touch` is only valid on button actions.
 - Listener order: context priority, then definition order; within an action, registration order. Errors are warned (`[HYDROGEN] Input action X onBegan listener errored`); yields don't block other listeners.
 - Zero cost when unused: no connections until the first definition on a client; no per-frame work except while the mouse is moving over an action bound to `MouseMovement`/`MouseWheel`.
+- Buffering (`buffer = seconds`, buttons only): each press that begins the action (any binding, its touch button, `Input.bindButton`, `Input.source`) stores `Hydrogen.Clock.now()`; a newer press replaces it. `consumeBuffered()` returns `Clock.now() - pressTime <= buffer` and clears the press, so each press is taken once. No timers, no per-frame work: one `Clock.now()` per press.
+- The press is stored before `onBegan` listeners run, so a listener can consume the press it was called for. Consume on the immediate path too (one `tryAttack` function called from `onBegan` and from recovery end), or a press that already attacked fires again when a recovery shorter than `buffer` ends.
+- Only presses that begin the action are buffered. Not buffered: holding the button, a second binding pressed while it is held, presses a higher-priority sinking context takes, presses while its context is disabled, game-processed input, `captureKey` presses.
+- Disabling the action's context (`disable`, `setEnabled(false)`, `disableFor`) clears its buffered press, so a press from before a menu opened never fires after it closes. `Input.reset()` clears all. Rebinding keeps a buffered press. A higher context that later starts sinking the key does not clear it.
+- Buffering is game-gated: Hydrogen never fires a buffered press by itself. `onBegan` fires on every press as usual; your code decides when the action may use one by calling `consumeBuffered()`.
 
 ## Recipes
 
@@ -221,6 +228,28 @@ scope:add(Controls.Interact:observeGlyph(function(glyph: Hydrogen.InputGlyph?)
 end))
 ```
 
+Combo with input buffering: a press in the last 0.15 s of recovery fires when recovery ends:
+```luau
+local M1 = Gameplay:button("M1", { Enum.UserInputType.MouseButton1, Key.ButtonR1 }, { buffer = 0.15, touch = true })
+local RECOVERY = 0.4
+
+local recovering = false
+local function tryAttack()
+	-- Busy, or no press in the window: do nothing (a press now stays buffered for 0.15 s).
+	if recovering or not M1:consumeBuffered() then
+		return
+	end
+	recovering = true
+	-- play the swing, hit-check, advance the combo step
+	Hydrogen.Clock.delay(RECOVERY, function()
+		recovering = false
+		tryAttack() -- takes a press buffered during recovery
+	end)
+end
+scope:add(M1:onBegan(tryAttack))
+```
+Stunned or knocked down: call `M1:consumeBuffered()` and ignore the result to drop a pending press. Hold-to-auto-attack is not buffering: at recovery end, also attack `if M1:held()`.
+
 Custom touch joystick driving a vector2:
 ```luau
 local stick = Input.source(Controls.Move)
@@ -242,6 +271,10 @@ stick:set(Vector2.zero)
 - Don't expect a sinking context to stop the default Roblox character controls; disable them via the PlayerModule.
 - Don't keep the returned disconnect functions on the floor in systems; `scope:add(...)` them.
 - Don't listen to input on the server; it warns once and never fires.
+- Don't call `consumeBuffered()` only when recovery ends; call it on the press path too (one `tryAttack` for both), or the press that started an attack fires a second one after a short recovery.
+- Don't poll `consumeBuffered()` every frame while waiting for recovery; call it once when recovery ends (`Clock.delay`, an animation marker).
+- Don't keep your own "pressed during recovery" flag and timestamp; use `{ buffer = seconds }` and `consumeBuffered()`, which also clear on context disable and in `Input.reset`.
+- Don't use `buffer` for hold-to-repeat; check `action:held()` when recovery ends.
 
 ## Testing
 
@@ -263,6 +296,7 @@ end) -- Input.reset() runs here: bindings, contexts, device, listeners back to d
 ```
 
 - `Hydrogen.test` resets Input when it closes; with another framework call `Input.reset()` in teardown.
+- Buffering runs on `Hydrogen.Clock`, so the fake clock drives it: `simulate.tap(Enum.UserInputType.MouseButton1); t:advance(0.1); assert(M1:consumeBuffered())`; after `t:advance(0.2)` with `buffer = 0.15` it is false. A recovery made with `Hydrogen.Clock.delay` fires inside `t:advance`, so the whole combo runs in one test.
 - Touch buttons under Lune: `Input.configure({ touchParent = Instance.new("Folder") })`, then `Input.simulate.device("touch")`; inspect `action:touchButton()`. Lune Instances have no events, so press through `Input.bindButton(action, fakeButton)` with a table `{ InputBegan = signal, InputEnded = signal }` whose inputs have `UserInputType = Enum.UserInputType.Touch`, or through `Input.source(action)`.
 - `UserInputService` itself is never connected under Lune (RunService:IsClient() is false). Hydrogen's own tests drive the adapter with a fake service via `src/Input/Device.luau`'s `connect`.
 
@@ -273,6 +307,10 @@ end) -- Input.reset() runs here: bindings, contexts, device, listeners back to d
 - `[HYDROGEN] Input action X (kind): binding N: <reason>` → the binding doesn't fit the kind; the reason says what to bind instead (e.g. "a vector2 action binds a thumbstick, MouseMovement, or { up, down, left, right }", "it mixes keyboard and gamepad keys").
 - `[HYDROGEN] Input action X has no option Y` / `Input context X has no option Y` → typo in options.
 - `[HYDROGEN] Input action X: touch buttons are for button actions; drive a <kind> from your own control with Input.source`.
+- `[HYDROGEN] Input action X: buffer is for button actions; an axis has no presses to remember` (or `a vector2`) → only buttons buffer; drop the option.
+- `[HYDROGEN] Input action X: buffer must be a positive number of seconds, e.g. { buffer = 0.15 }` → pass a number > 0 (typical 0.1 to 0.25).
+- `[HYDROGEN] Input action X has no buffer; define it with { buffer = seconds }, e.g. context:button("X", bindings, { buffer = 0.15 })` → `consumeBuffered` on a button defined without `buffer`; add the option.
+- `[HYDROGEN] Input action X is an axis; consumeBuffered is for button actions defined with { buffer = seconds }` (or `a vector2`) → call it on a button action.
 - `[HYDROGEN] Input action X: rebind conflict must be "reject", "swap", "unbind" or "allow"`.
 - `[HYDROGEN] Input action X: unbind takes "keyboard" or "gamepad"`.
 - `[HYDROGEN] Input action X is a <kind>; source:set expects a <type>`.
@@ -287,7 +325,7 @@ end) -- Input.reset() runs here: bindings, contexts, device, listeners back to d
 ## Works with
 
 - `Hydrogen.Scope`: `scope:add(action:onBegan(...))`, `context:enableFor(scope)`, `Input.bindButton(action, button, scope)`.
-- `Hydrogen.Clock`: `onHold` timers and mouse-delta frame resets use it, so `Hydrogen.test`'s fake clock drives them.
+- `Hydrogen.Clock`: `onHold` timers, mouse-delta frame resets and buffered press times use it, so `Hydrogen.test`'s fake clock drives them.
 - `Hydrogen.test`: resets Input on close; capture warnings with `t:expectWarning`.
 - `Hydrogen.Data` / network: persist `Input.saveBindings()` through a `clientEvent` into a Data field; load with `Input.loadBindings`.
 - Client systems (`Hydrogen.define`): attach listeners in `start` with `Scope.of(self)`.

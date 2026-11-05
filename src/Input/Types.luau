@@ -96,6 +96,9 @@ export type TouchOptions = {
 export type ButtonOptions = {
 	-- An on-screen button while the player uses touch: true, or how it looks.
 	touch: (boolean | TouchOptions)?,
+	-- Seconds a press stays usable for action:consumeBuffered, e.g. 0.15 for a combo that
+	-- takes the next attack pressed during recovery.
+	buffer: number?,
 }
 
 export type AxisOptions = {
@@ -127,6 +130,9 @@ export type AnyAction = {
 	onEnded: (self: AnyAction, listener: () -> ()) -> () -> (),
 	-- Once per press, after it has been held for seconds without a release.
 	onHold: (self: AnyAction, seconds: number, listener: () -> ()) -> () -> (),
+	-- Button defined with { buffer = seconds }: true if it began within the last buffer seconds
+	-- and no call has taken that press yet. Takes it either way. Errors on actions without a buffer.
+	consumeBuffered: (self: AnyAction) -> boolean,
 
 	-- The current bindings, for one device or all of them.
 	bindings: (self: AnyAction, device: Device?) -> { Binding },

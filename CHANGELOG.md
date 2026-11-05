@@ -7,6 +7,7 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 ### Added
 
 - `Hydrogen.Clock.serverNow()`: the server's clock, shared by the server and every client (`workspace:GetServerTimeNow()` in a game), for timestamps one side sends and the other compares. The fake clock drives it from a new `serverNow` option (default: the `time` option), and `fake:setServerOffset(seconds, player?)` skews it for one loopback client, or all of them, to test latency and clock skew.
+- Input buffering on button actions: `context:button(name, bindings, { buffer = seconds })` remembers each press for `buffer` seconds (timed with `Hydrogen.Clock`), and `action:consumeBuffered(): boolean` takes it once, so a combo press made during recovery fires when the recovery ends. Disabling the action's context clears the buffered press; sunk presses are never buffered. No per-frame work.
 
 ### Changed
 
