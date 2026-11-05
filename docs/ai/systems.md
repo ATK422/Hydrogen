@@ -118,10 +118,10 @@ function Match:playerRemoving(player: Player)
 end
 ```
 
-**Listening to the network.** Register listeners in `start`. The network is live there, and `init` is too early for functions.
+**Listening to the network.** Register listeners in `init`, and call functions from `start`. The network starts after every `init` and before any `start`; a client handles the events queued for it at that moment, so a listener added in `start` can miss them. Functions can't be called until the network has started.
 
 ```luau
-function ChatServer:start()
+function ChatServer:init()
 	Remotes.SendMessage:On(function(player, text)
 		Remotes.MessagePosted:FireAll(player.Name, text)
 	end)
@@ -169,5 +169,5 @@ Use `app:replace(original, fake)` to swap a dependency, and `Hydrogen.loopback()
 
 - `app.md`: adding systems and booting.
 - `character.md`: the character hooks and per-character scopes.
-- `network.md`: listeners are registered from `start`.
+- `network.md`: listeners are registered in `init`; functions are called from `start`.
 - The kit modules (`data.md`, `player-state.md`, `state.md`, `scope.md`, `receipts.md`) are systems or factories for systems. `use` them like any other system.

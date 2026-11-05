@@ -340,6 +340,76 @@ Hydrogen.test({ players = 1 }, function(t)
 end)
 ```
 
+### Hit detection without spatial queries
+
+`workspace:GetPartBoundsInBox`, `GetPartsInPart`, `Raycast` and `Spherecast` don't exist under Lune (and only see real physics in Studio). Put every spatial query behind one small system, give the rules plain values, and replace the query system in tests:
+
+```luau
+-- ServerScriptService/Systems/Spatial.luau: the only code that touches physics
+return Hydrogen.define(function()
+	local Spatial = {}
+
+	-- Characters with a part in the box, each once.
+	function Spatial.charactersInBox(cframe: CFrame, size: Vector3, ignore: { Instance }): { Model }
+		local params = OverlapParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = ignore
+		local found: { [Model]: boolean } = {}
+		local list: { Model } = {}
+		for _, part in workspace:GetPartBoundsInBox(cframe, size, params) do
+			local model = part:FindFirstAncestorOfClass("Model")
+			if model and model:FindFirstChildOfClass("Humanoid") and not found[model] then
+				found[model] = true
+				table.insert(list, model)
+			end
+		end
+		return list
+	end
+
+	return Spatial
+end)
+```
+
+```luau
+-- ServerScriptService/Systems/Melee.luau: rules only, no physics
+local SpatialSystem = require(script.Parent.Spatial)
+
+return Hydrogen.define(function(use)
+	local Spatial = use(SpatialSystem)
+	local Melee = {}
+
+	function Melee.swing(attacker: Model, root: CFrame): { Model }
+		local hitbox = root * CFrame.new(0, 0, -3)
+		return Spatial.charactersInBox(hitbox, Vector3.new(5, 5, 4), { attacker })
+	end
+
+	return Melee
+end)
+```
+
+```luau
+-- Test: decide what the query "sees"; check what the rules do with it
+local victim = Instance.new("Model")
+local lastBox: CFrame? = nil
+Hydrogen.test({
+	systems = { Melee },
+	replace = { [SpatialSystem] = {
+		charactersInBox = function(cframe: CFrame, _size: Vector3, _ignore: { Instance }): { Model }
+			lastBox = cframe
+			return { victim }
+		end,
+	} },
+}, function(t)
+	local hits = Melee.swing(Instance.new("Model"), CFrame.new(0, 0, 0))
+	assert(hits[1] == victim)
+	assert((lastBox :: CFrame).Position.Z == -3) -- the box is in front of the attacker
+end)
+```
+
+- Keep geometry math (where the box goes, range and angle checks, interpolating a rewound position) in pure functions over `CFrame`, `Vector3` and numbers. Lune has these datatypes, so they test directly with no fake.
+- The fake decides what overlaps. Test the rules ("a parried hit does nothing", "the attacker is never hit"), not Roblox physics; check those in a Studio playtest.
+- Under Lune, `Instance.new("Model")` and `Instance.new("Part")` work as plain instances, so fakes can return real instances.
+
 ### Frameworks with beforeEach/afterEach
 
 ```luau
@@ -385,6 +455,8 @@ process.exit(if ok then 0 else 1) -- exit explicitly; leftover timers can keep L
 Under Lune, `RunService:IsServer()` and `IsClient()` return false, Heartbeat never fires (use the fake clock), and modules are named like Roblox full names (`src.Systems.Shop`), so `Hydrogen.define` infers ids as in Studio.
 
 ## Mistakes
+
+- Don't call `workspace:GetPartBoundsInBox`, `Raycast` or other spatial queries from the systems you test under Lune; they don't exist there. Do put them in one query system and `replace` it with a fake that returns what overlaps.
 
 - Don't call `app:stop()` and `net:close()` by hand around `Hydrogen.loopback()`. Do use `Hydrogen.test`, which can't forget to.
 - Don't fire client code outside `t:as` when two or more players joined. Do `t:as(player, function() Remote:Fire(...) end)`.

@@ -237,10 +237,10 @@ return Hydrogen.define(function(use)
 	local Combat = {}
 	local lastAttack: { [Player]: number } = {}
 
-	function Combat:start()
+	function Combat:init()
 		-- One listener for everyone; :On returns a disconnect function.
 		Scope.of(self):add(Remotes.Attack:On(function(player: Player, targetId: number)
-			local now = os.clock()
+			local now = Hydrogen.Clock.now()
 			if now - (lastAttack[player] or 0) < 0.5 then
 				return
 			end
@@ -275,7 +275,7 @@ trove:Add(Scope.new("ui"))         -- Trove can clean a scope: it has Destroy
 - Don't `Instance.new(...)`/`:Clone()` a per-player object without tracking it. Do `local part = scope:add(Instance.new("Part"))`.
 - Don't call `Remote:On(fn)` and drop the returned function. Do `scope:add(Remote:On(fn))`.
 - Don't call `scope:connect(Remote, fn)` on a Hydrogen network object; it errors. Do `scope:add(Remote:On(fn))`.
-- Don't register a network listener per player inside `playerAdded` (every listener hears every player). Do register once with `Scope.of(self)` in `start`, and check the `player` argument.
+- Don't register a network listener per player inside `playerAdded` (every listener hears every player). Do register once with `Scope.of(self)` in `init`, and check the `player` argument.
 - Don't call `Scope.of(self)` in the `define` constructor body; it errors because no app runs the system yet. Do call it in `init`, `start` or later.
 - Don't call `Scope.of(self, player)` from your own `Players.PlayerAdded:Connect`; it can run before Hydrogen adds the player and error. Do use the `playerAdded` hook.
 - Don't write `function S:playerAdded(player, scope)` and expect a scope; hooks get no scope argument. Do `local scope = Scope.of(self, player)`.

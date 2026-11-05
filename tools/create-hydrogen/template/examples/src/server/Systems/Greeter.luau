@@ -1,7 +1,7 @@
 --!strict
 
 -- Answers SayHello with a greeting. Shows `use` (a dependency on Visits, which then starts
--- first) and a network listener registered in start.
+-- first) and a network listener registered in init.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -20,7 +20,7 @@ return Hydrogen.define(function(use)
 		return `Hello, {player.DisplayName}! You said "{said}". This is your {times}.`
 	end
 
-	function Greeter:start()
+	function Greeter:init()
 		Greeting.SayHello:On(function(player, said)
 			Greeting.Greeted:Fire(player, Greeter.message(player, said))
 		end)

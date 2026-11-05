@@ -188,7 +188,7 @@ When a module such as `Hydrogen.Data` ships in a Hydrogen release, add it to `Op
 {
 	id = "data",
 	label = "Hydrogen.Data: saved player data with session locking",
-	hydrogen = "^0.5.0",
+	hydrogen = "^0.5.1",
 	overlays = { "kit/data" },
 },
 ```

@@ -65,6 +65,91 @@ return function()
 	-- Hydrogen.test is the one-call way to test systems; the "Testing" suite below shows the
 	-- loopback and replace tools it is built on.
 	test.suite("Harness", function()
+		-- The testing.md recipe "Hit detection without spatial queries", as written there.
+		test.case("a replaced query system stands in for spatial queries", function()
+			local SpatialSystem = Hydrogen.define("RecipeSpatial", function()
+				local Spatial = {}
+				function Spatial.charactersInBox(cframe: CFrame, size: Vector3, ignore: { Instance }): { Model }
+					local params = OverlapParams.new()
+					params.FilterDescendantsInstances = ignore
+					local list: { Model } = {}
+					for _, part in workspace:GetPartBoundsInBox(cframe, size, params) do
+						table.insert(list, part:FindFirstAncestorOfClass("Model") :: Model)
+					end
+					return list
+				end
+				return Spatial
+			end)
+			local Melee = Hydrogen.define("RecipeMelee", function(use)
+				local Spatial = use(SpatialSystem)
+				local Melee = {}
+				function Melee.swing(attacker: Model, root: CFrame): { Model }
+					local hitbox = root * CFrame.new(0, 0, -3)
+					return Spatial.charactersInBox(hitbox, Vector3.new(5, 5, 4), { attacker })
+				end
+				return Melee
+			end)
+
+			local victim = Instance.new("Model")
+			local lastBox: CFrame? = nil
+			Hydrogen.test({
+				systems = { Melee },
+				replace = {
+					[SpatialSystem] = {
+						charactersInBox = function(cframe: CFrame, _size: Vector3, _ignore: { Instance }): { Model }
+							lastBox = cframe
+							return { victim }
+						end,
+					},
+				},
+			}, function(_t)
+				local hits = Melee.swing(Instance.new("Model"), CFrame.new(0, 0, 0))
+				check.equal(hits[1], victim)
+				check.equal((lastBox :: CFrame).Position.Z, -3)
+			end)
+			return nil
+		end)
+
+		test.case("client listeners registered in init hear events queued before the network started", function()
+			local Welcome = Hydrogen.serverEvent("ListenerHookWelcome", gt.string())
+			local heard: { string } = {}
+			local target: Player? = nil
+			local Sender = Hydrogen.define("ListenerHookSender", function()
+				return {
+					-- Queued: the network starts after every init.
+					init = function()
+						Welcome:Fire(target :: Player, "hello")
+					end,
+				}
+			end)
+			local InInit = Hydrogen.define("ListenerHookInit", function()
+				return {
+					init = function()
+						Welcome:On(function(text: string)
+							table.insert(heard, `init:{text}`)
+						end)
+					end,
+				}
+			end)
+			local InStart = Hydrogen.define("ListenerHookStart", function()
+				return {
+					start = function()
+						Welcome:On(function(text: string)
+							table.insert(heard, `start:{text}`)
+						end)
+					end,
+				}
+			end)
+
+			Hydrogen.test({ systems = { Sender, InInit, InStart }, players = 1, start = false }, function(t, player)
+				target = player
+				t:start()
+				t:advance(0)
+			end)
+			check.equal(table.concat(heard, ","), "init:hello")
+			return nil
+		end)
+
 		test.case("Hydrogen.test boots systems with fakes and players", function()
 			local Buy = Hydrogen.clientEvent("h-Buy", gt.string())
 			local Bought = Hydrogen.serverEvent("h-Bought", gt.string(), gt.number())

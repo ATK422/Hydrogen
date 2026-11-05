@@ -201,12 +201,19 @@ Saving and limits
 - `updateOnce` keeps the last 100 ids per record.
 - Records over 4 MB fail to save (Roblox limit).
 
+Teleport hand-off (`Hydrogen.Teleport`)
+- `Teleport.send` saves and releases every `Data.player` store holding the player before calling `TeleportAsync`, so the destination's load finds no lock. Nothing to configure: every player store takes part.
+- Between that release and the player leaving (or the data being taken back): `get`/`find` still return the data; `isLoaded` and `waitForLoad` are false; `update` and PlayerState writes change memory only; `updateOnce` returns `"failed"`; `transaction` errors (`isn't usable (handedOff)`); `save` returns `false`; autosave skips the player.
+- If the teleport fails, the data is taken back with the same lock: changes made meanwhile are kept and saved when the stored record is still what the hand-off wrote, otherwise the stored data wins (warned). If it can't be taken back, `onLoadFailed` runs (default: warn and kick).
+- If the player leaves after a hand-off, nothing is saved in `playerRemoving`; changes made after the hand-off are lost and warned. Make them before `Teleport.send`, or in `Teleport.onHandOff`.
+- A release write that errored may still have landed. The retry of that release, and the session's next write after a failed hand-off, accept an unlocked record that holds exactly the data that write stored, instead of treating the lock as lost. Anything else unlocked (another server loaded and changed it) is still a lost lock.
+
 Transactions
 - `transaction` applies to all keys in memory at once, then saves them with a two-phase commit (pending marker, each record tagged with the transaction id and its previous data, marker removed = commit). A crash before the commit loads every key with its previous data; after it, with the new data. Until committed, those keys are only saved together. All keys must be loaded on this server and in the same store.
 
 ## Recipes
 
-Grant a developer product exactly once (until `Hydrogen.Receipts` lands; afterwards use its Data adapter):
+Grant a developer product exactly once. In a game, use `Hydrogen.Receipts` with `Hydrogen.Receipts.fromData(PlayerData)` (receipts.md), which does this for every product and adds retries, game passes and tests. This is what it does underneath, for a game that owns `ProcessReceipt` itself:
 
 ```luau
 local MarketplaceService = game:GetService("MarketplaceService")
@@ -383,6 +390,9 @@ Warnings:
 - `Data store <name>: autosave of <key> failed: <err>`: retried next interval.
 - `Data store <name>: couldn't save <key> on unload, changes since the last save are lost: <err>`.
 - `Data store <name>: a transaction including <key> couldn't be saved: <err>` and `a transaction member lost its lock; saving the rest without it`.
+- `Data store <name>: changes to <player> made after their data was handed off for a teleport weren't saved; make them before Teleport.send, or in Teleport.onHandOff`.
+- `Data store <name>: <player>'s saved data changed while their teleport was in progress; changes made here since the hand-off were dropped`: something wrote the released record before a failed teleport took it back.
+- `<name> couldn't take <player>'s data back after a failed teleport: <err>` (passed to `onLoadFailed`; the default warns and kicks).
 - `Data changed listener failed: <err>`: your `changed` callback errored; other listeners still ran.
 
 ## Works with
@@ -390,5 +400,6 @@ Warnings:
 - `Hydrogen.PlayerState`: `PlayerState.new(name, { data = PlayerData, ... })` turns the store's fields into saved fields of a per-player state that replicates per field. Writes through the state go to the store, and changes made through the store (`update`, `updateOnce`, `transaction`) show up in the state.
 - `Hydrogen.Receipts`: `Hydrogen.Receipts.configure({ store = Hydrogen.Receipts.fromData(PlayerData) })` records each purchase id with its grant through `updateOnce`, so a purchase is granted exactly once. Product handlers get the draft data after the receipt (`function(player, receipt, data)`) and should change it; helpers that call `PlayerData:update` inside a grant also work.
 - `Hydrogen.State`: Data itself doesn't replicate. PlayerState replicates its fields through State.
+- `Hydrogen.Teleport`: `Teleport.send` hands off every player store (save, release, teleport, take back on failure), so the destination loads without waiting for this server's lock. See teleport.md.
 - Test harness and fake clock: all Data timing goes through `Hydrogen.Clock` (`Hydrogen.Data.Clock` forwards to it). Under `Hydrogen.test`, retry and backoff waits, lock waits and autosave ticks only move on `t:advance(seconds)`.
 - Core: stores are ordinary systems, so `use`, `app:replace` and the player and stop hooks apply as usual.

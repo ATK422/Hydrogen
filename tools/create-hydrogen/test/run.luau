@@ -415,7 +415,7 @@ group("Scaffold.plan", function()
 		end
 		contains(files["src/server/Main.server.luau"], "app:addNetwork(ReplicatedStorage.Shared.Network)")
 		contains(files["src/client/Main.client.luau"], 'WaitForChild("Network")')
-		contains(files["pesde.toml"], 'hydrogen = { name = "atk422/hydrogen", version = "^0.5.0" }')
+		contains(files["pesde.toml"], 'hydrogen = { name = "atk422/hydrogen", version = "^0.5.1" }')
 		contains(files.LICENSE, "Copyright (c) 2026 ATK")
 	end)
 

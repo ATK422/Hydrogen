@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
+local Clock = require("../Clock")
 local Log = require("../Log")
 local Middleware = require("./Middleware")
 local Runtime = require("./Runtime")
@@ -323,6 +324,11 @@ function Loopback.new(): Loopback
 		return current
 	end
 
+	local function currentClient(): Player?
+		return current
+	end
+	Clock._client = currentClient
+
 	function loopback:owns(value: any): boolean
 		return owned[value] == true
 	end
@@ -356,6 +362,9 @@ function Loopback.new(): Loopback
 		table.clear(watchers)
 		restore(saved)
 		disconnect()
+		if Clock._client == currentClient then
+			Clock._client = nil
+		end
 	end
 
 	Runtime.RemoteEvent = remoteEvent() :: any

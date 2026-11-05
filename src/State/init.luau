@@ -7,6 +7,7 @@
 local Computed = require("@self/Computed")
 local List = require("@self/List")
 local Map = require("@self/Map")
+local Meter = require("@self/Meter")
 local Store = require("@self/Store")
 local Value = require("@self/Value")
 local Wire = require("@self/Wire")
@@ -132,6 +133,80 @@ export type PlayerList<T> = {
 
 export type Computed<T> = Computed.Computed<T>
 
+-- Where a meter stops: its min or its max.
+export type MeterLimit = "min" | "max"
+
+export type MeterOptions = {
+	-- Defaults to 0.
+	min: number?,
+	max: number,
+	-- The starting value. Defaults to max.
+	value: number?,
+	-- Units per second the value starts moving at; negative drains. Defaults to 0.
+	rate: number?,
+	encode: boolean?,
+}
+
+export type PlayerMeterOptions = {
+	min: number?,
+	max: number,
+	value: number?,
+	rate: number?,
+	-- Defaults to "owner".
+	visibleTo: VisibleTo?,
+	-- Lets the owning client show predictRate / predictAdd before the server answers.
+	predict: boolean?,
+	-- Seconds a prediction shows if no update from the server arrives. Defaults to 1.
+	predictTimeout: number?,
+	encode: boolean?,
+}
+
+export type Meter = {
+	read name: string,
+	read event: Event,
+	-- The value now, worked out from the last change, the rate and Clock.serverNow(), within
+	-- [min, max]. Costs a little arithmetic; call it every frame for UI.
+	get: (self: Meter) -> number,
+	-- Units per second.
+	getRate: (self: Meter) -> number,
+	getRange: (self: Meter) -> (number, number),
+	-- An instant change, clamped. The rate carries on from the new value.
+	set: (self: Meter, value: number) -> (),
+	add: (self: Meter, delta: number) -> (),
+	-- The value carries on from where it is now at the new rate.
+	setRate: (self: Meter, rate: number) -> (),
+	setRange: (self: Meter, min: number, max: number) -> (),
+	-- Calls observer with the value and rate now, then on every change (a write, an update
+	-- arriving, a prediction). Not as time passes: read get() for that.
+	observe: (self: Meter, observer: (value: number, rate: number) -> ()) -> Disconnect,
+	-- Calls listener each time the value arrives at its min or max, by its rate (on time, with
+	-- one timer) or by a change. Not called for where it is when connected.
+	onLimit: (self: Meter, listener: (limit: MeterLimit) -> ()) -> Disconnect,
+}
+
+export type PlayerMeter = {
+	read name: string,
+	read event: Event,
+	get: (self: PlayerMeter, player: Player) -> number,
+	getRate: (self: PlayerMeter, player: Player) -> number,
+	getRange: (self: PlayerMeter, player: Player) -> (number, number),
+	set: (self: PlayerMeter, player: Player, value: number) -> (),
+	add: (self: PlayerMeter, player: Player, delta: number) -> (),
+	setRate: (self: PlayerMeter, player: Player, rate: number) -> (),
+	setRange: (self: PlayerMeter, player: Player, min: number, max: number) -> (),
+	-- Server: sends the meter again though nothing changed, so the owner's prediction is
+	-- replaced at once, e.g. after turning down the request it predicted.
+	sync: (self: PlayerMeter, player: Player) -> (),
+	-- Owning client, with predict = true: shows the new rate (or instant change) at once, until
+	-- the next update from the server replaces it or predictTimeout passes. Changes nothing on
+	-- the server: send a clientEvent so the server makes the real change.
+	predictRate: (self: PlayerMeter, player: Player, rate: number) -> (),
+	predictAdd: (self: PlayerMeter, player: Player, delta: number) -> (),
+	observe: (self: PlayerMeter, player: Player, observer: (value: number, rate: number) -> ()) -> Disconnect,
+	observeAll: (self: PlayerMeter, observer: (player: Player, value: number, rate: number) -> ()) -> Disconnect,
+	onLimit: (self: PlayerMeter, player: Player, listener: (limit: MeterLimit) -> ()) -> Disconnect,
+}
+
 --------------------------------------------------------------------------------
 -- Checks. Raised at level 4: check <- operation <- method wrapper <- caller.
 --------------------------------------------------------------------------------
@@ -160,11 +235,30 @@ local function writable(state: any)
 	Store.assertWritable(state, 4)
 end
 
+local function finite(value: any): boolean
+	return type(value) == "number" and value == value and math.abs(value) ~= math.huge
+end
+
+local function describe(value: any): string
+	if value ~= value then
+		return "NaN"
+	elseif type(value) == "number" then
+		return tostring(value)
+	end
+	return typeof(value)
+end
+
+local function assertFinite(state: any, value: any, method: string)
+	if not finite(value) then
+		error(`[HYDROGEN] State {state.name}: {method} expects a finite number, got {describe(value)}`, 4)
+	end
+end
+
 --------------------------------------------------------------------------------
 -- Operations, written once with a player argument (nil for global state).
 --------------------------------------------------------------------------------
 
-type Ops = { [string]: (state: any, player: Player?, ...any) -> any }
+type Ops = { [string]: (state: any, player: Player?, ...any) -> ...any }
 
 local ValueOps: Ops = {}
 
@@ -334,6 +428,101 @@ function ListOps.observe(state, player, observer)
 	return List.observe(state, player, observer)
 end
 
+local MeterOps: Ops = {}
+
+function MeterOps.get(state, player)
+	return Meter.get(state, player)
+end
+
+function MeterOps.getRate(state, player)
+	return Meter.getRate(state, player)
+end
+
+function MeterOps.getRange(state, player)
+	return Meter.getRange(state, player)
+end
+
+function MeterOps.set(state, player, value)
+	writable(state)
+	assertFinite(state, value, "set")
+	Meter.set(state, player, value)
+	return nil
+end
+
+function MeterOps.add(state, player, delta)
+	writable(state)
+	assertFinite(state, delta, "add")
+	Meter.add(state, player, delta)
+	return nil
+end
+
+function MeterOps.setRate(state, player, rate)
+	writable(state)
+	assertFinite(state, rate, "setRate")
+	Meter.setRate(state, player, rate)
+	return nil
+end
+
+function MeterOps.setRange(state, player, min, max)
+	writable(state)
+	assertFinite(state, min, "setRange")
+	assertFinite(state, max, "setRange")
+	if min > max then
+		error(`[HYDROGEN] State {state.name}: setRange got min ({min}) greater than max ({max})`, 3)
+	end
+	Meter.setRange(state, player, min, max)
+	return nil
+end
+
+function MeterOps.observe(state, player, observer)
+	return Meter.observe(state, player, observer)
+end
+
+function MeterOps.onLimit(state, player, listener)
+	if type(listener) ~= "function" then
+		error(`[HYDROGEN] State {state.name}: onLimit expects a function, got {typeof(listener)}`, 3)
+	end
+	return Meter.onLimit(state, player, listener)
+end
+
+-- Checks a prediction may run here: on the client that owns the meter. Returns its context.
+local function predicting(state: any, player: Player, method: string, serverMethod: string): any
+	if not state.meter.predict then
+		error(`[HYDROGEN] State {state.name}: {method} needs predict = true in the playerMeter options`, 4)
+	end
+	local ctx = Store.context()
+	if ctx == Store.SERVER then
+		error(`[HYDROGEN] State {state.name}: {method} runs on the client that owns the meter; the server changes it with {serverMethod}`, 4)
+	end
+	if Store.localUserId(ctx) ~= player.UserId then
+		error(`[HYDROGEN] State {state.name}: a client can only predict its own meter; pass Players.LocalPlayer, got {player.Name}`, 4)
+	end
+	return ctx
+end
+
+-- Only per-player meters: the owning client predicts, and the server can resend to correct it.
+local PlayerMeterOps: Ops = table.clone(MeterOps)
+
+function PlayerMeterOps.sync(state, player)
+	writable(state)
+	Meter.sync(state, player)
+	return nil
+end
+
+function PlayerMeterOps.predictRate(state, player, rate)
+	local ctx = predicting(state, player :: Player, "predictRate", "setRate")
+	assertFinite(state, rate, "predictRate")
+	Meter.predict(state, ctx, player :: Player, rate, nil)
+	return nil
+end
+
+function PlayerMeterOps.predictAdd(state, player, delta)
+	local ctx = predicting(state, player :: Player, "predictAdd", "add")
+	assertFinite(state, delta, "predictAdd")
+	Meter.predict(state, ctx, player :: Player, nil, delta)
+	return nil
+end
+
 --------------------------------------------------------------------------------
 -- Methods: global state passes no player; per-player state checks the one it was given.
 --------------------------------------------------------------------------------
@@ -351,8 +540,8 @@ local function globalMethods(ops: Ops): { [string]: any }
 	local methods = {}
 	for name, op in ops do
 		methods[name] = function(self: any, a: any, b: any)
-			local result = op(self, nil, a, b)
-			return result
+			local result, second = op(self, nil, a, b)
+			return result, second
 		end
 	end
 	return methods
@@ -365,8 +554,8 @@ local function playerMethods(ops: Ops): { [string]: any }
 			if not isPlayer(player) then
 				error(`[HYDROGEN] State {self.name} is per player: pass the player first (:{name}(player, ...)), got {typeof(player)}`, 2)
 			end
-			local result = op(self, player, a, b)
-			return result
+			local result, second = op(self, player, a, b)
+			return result, second
 		end
 	end
 	return methods
@@ -384,9 +573,11 @@ local metatables = {
 	value = { __index = globalMethods(ValueOps) },
 	map = { __index = globalMethods(MapOps) },
 	list = { __index = globalMethods(ListOps) },
+	meter = { __index = globalMethods(MeterOps) },
 	playerValue = { __index = withObserveAll(playerMethods(ValueOps), Value.observeAll) },
 	playerMap = { __index = withObserveAll(playerMethods(MapOps), Map.observeAll) },
 	playerList = { __index = withObserveAll(playerMethods(ListOps), List.observeAll) },
+	playerMeter = { __index = withObserveAll(playerMethods(PlayerMeterOps), Meter.observeAll) },
 }
 
 --------------------------------------------------------------------------------
@@ -397,6 +588,7 @@ local kinds = {
 	value = Value :: Store.Kind,
 	map = Map :: Store.Kind,
 	list = List :: Store.Kind,
+	meter = (Meter :: any) :: Store.Kind,
 }
 
 local function identity(value: any): any
@@ -405,13 +597,78 @@ end
 
 type Spec = {
 	name: any,
-	kind: "value" | "map" | "list",
+	kind: "value" | "map" | "list" | "meter",
 	perPlayer: boolean,
 	options: any,
-	schema: any,
+	schema: any?,
 	keySchema: any?,
-	initial: any,
+	initial: any?,
 }
+
+local METER_OPTIONS = { "min", "max", "value", "rate", "encode" }
+local PLAYER_METER_OPTIONS = { "min", "max", "value", "rate", "visibleTo", "predict", "predictTimeout", "encode" }
+
+-- Checks a meter's options. Errors are raised at the caller of State.meter / State.playerMeter:
+-- meterConfig <- define <- constructor <- caller.
+local function meterConfig(name: string, options: { [any]: any }, perPlayer: boolean): Meter.Config
+	local allowed = if perPlayer then PLAYER_METER_OPTIONS else METER_OPTIONS
+	for key in options do
+		if not table.find(allowed, key) then
+			if not perPlayer and (key == "predict" or key == "predictTimeout") then
+				error(`[HYDROGEN] State {name}: {key} only applies to State.playerMeter (a client predicts its own meter)`, 4)
+			end
+			error(`[HYDROGEN] State {name}: unknown meter option {tostring(key)}; meters take {table.concat(allowed, ", ")}`, 4)
+		end
+	end
+
+	-- number <- meterConfig <- define <- constructor <- caller
+	local function number(key: string, fallback: number?): number
+		local value = options[key]
+		if value == nil and fallback ~= nil then
+			return fallback
+		end
+		if not finite(value) then
+			local example = if key == "max" then ", e.g. { max = 100 }" else ""
+			error(`[HYDROGEN] State {name}: meter option {key} must be a finite number{example}, got {describe(value)}`, 5)
+		end
+		return value
+	end
+
+	local min = number("min", 0)
+	local max = number("max", nil)
+	if min > max then
+		error(`[HYDROGEN] State {name}: meter min ({min}) is greater than max ({max})`, 4)
+	end
+	local value = number("value", max)
+	if value < min or value > max then
+		error(`[HYDROGEN] State {name}: the initial value {value} is outside the meter's range ({min} to {max})`, 4)
+	end
+	local rate = number("rate", 0)
+
+	local predict = options.predict
+	if predict ~= nil and type(predict) ~= "boolean" then
+		error(`[HYDROGEN] State {name}: predict must be true or false, got {typeof(predict)}`, 4)
+	end
+	local timeout = options.predictTimeout
+	if timeout ~= nil then
+		if predict ~= true then
+			error(`[HYDROGEN] State {name}: predictTimeout only applies with predict = true`, 4)
+		end
+		if not finite(timeout) or timeout <= 0 then
+			error(`[HYDROGEN] State {name}: predictTimeout must be a positive number of seconds, got {describe(timeout)}`, 4)
+		end
+	end
+
+	return {
+		min = min,
+		max = max,
+		value = value,
+		rate = rate,
+		predict = predict == true,
+		predictTimeout = timeout or 1,
+		resting = { value = value, rate = 0, min = min, max = max, at = 0, started = true },
+	}
+end
 
 local function define(spec: Spec): any
 	local name = spec.name
@@ -432,7 +689,7 @@ local function define(spec: Spec): any
 
 	local visibleTo = options.visibleTo
 	if not spec.perPlayer and visibleTo ~= nil then
-		error(`[HYDROGEN] State {name}: visibleTo only applies to per-player state (playerValue, playerMap, playerList)`, 3)
+		error(`[HYDROGEN] State {name}: visibleTo only applies to per-player state (playerValue, playerMap, playerList, playerMeter)`, 3)
 	end
 	if visibleTo ~= nil and visibleTo ~= "owner" and visibleTo ~= "everyone" then
 		error(`[HYDROGEN] State {name}: visibleTo must be "owner" or "everyone", got {visibleTo}`, 3)
@@ -444,7 +701,8 @@ local function define(spec: Spec): any
 		error(`[HYDROGEN] State {name}: serializer needs schema, serialize and deserialize`, 3)
 	end
 
-	local check = Wire.build(spec.schema)
+	local meter = if spec.kind == "meter" then meterConfig(name, options, spec.perPlayer) else nil
+	local check = if meter then nil else Wire.build(spec.schema)
 	if spec.kind == "value" then
 		local ok, cause = check:matches(spec.initial)
 		if not ok then
@@ -470,6 +728,7 @@ local function define(spec: Spec): any
 		watchers = {},
 		_check = check,
 		_keyCheck = if spec.keySchema ~= nil then Wire.build(spec.keySchema) else nil,
+		meter = meter,
 	} :: any
 
 	state.receive = function(...: any)
@@ -516,6 +775,18 @@ end
 -- An array per player, such as a quest log.
 function State.playerList<T>(name: string, itemSchema: T, options: PlayerOptions?): PlayerList<T>
 	return define({ name = name, kind = "list", perPlayer = true, options = options, schema = itemSchema })
+end
+
+-- A number that moves at a steady rate between a min and a max, which everyone sees: a shared
+-- objective's heat, a zone's charge. Only changes are sent; get() works the value out for now.
+function State.meter(name: string, options: MeterOptions): Meter
+	return define({ name = name, kind = "meter", perPlayer = false, options = options })
+end
+
+-- A meter per player, such as stamina, mana or hunger, seen by that player ("owner", the
+-- default) or by everyone. With predict = true the owning client can show a change at once.
+function State.playerMeter(name: string, options: PlayerMeterOptions): PlayerMeter
+	return define({ name = name, kind = "meter", perPlayer = true, options = options })
 end
 
 -- State derived from other state by a function. It is never sent: each side computes it from its

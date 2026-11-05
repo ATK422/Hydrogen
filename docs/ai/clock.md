@@ -1,70 +1,82 @@
 # Hydrogen.Clock
 
-> The time source for Hydrogen, its kit modules and your systems: `now`, `time`, `wait`, `delay`, `cancel` and `heartbeat`. In a game they are the Roblox built-ins. In tests `Clock.fake()` replaces them, so timeouts, cooldowns, autosaves and retries run instantly and deterministically.
+> The time source for Hydrogen, its kit modules and your systems: `now`, `time`, `serverNow`, `wait`, `delay`, `cancel` and `heartbeat`. In a game they are the Roblox built-ins. In tests `Clock.fake()` replaces them, so timeouts, cooldowns, autosaves and retries run instantly and deterministically.
 
 ## Use it when / Don't use it when
 
 Use it when:
+- Server and client compare timestamps (when an ability started, where a meter was at a moment): `Clock.serverNow()` is one clock on both sides, and the fake clock can skew it per client.
 - A system measures durations or cooldowns (`Clock.now()`), schedules work later (`Clock.delay`), waits (`Clock.wait`), runs per frame (`Clock.heartbeat`) or stamps saved data (`Clock.time()`), and you want to test that code with `t:advance`.
 - You write a kit module or library on Hydrogen: all its time must go through `Clock`, so the test harness can control it.
 
 Don't use it when:
 - Measuring real performance (profiling, benchmarks): use `os.clock()` directly, because fake time would lie.
 - You need `task.spawn` or `task.defer`: those aren't time-based and `Clock` doesn't wrap them.
+- You want repeating work (autosaves, ticks, regen): use `Hydrogen.Scheduler` (`every`, `fixed`), which runs on `Clock` and stops with a scope. Don't hand-roll `while true do Clock.wait(n) end` loops.
 - You need calendar or time-zone handling: use `DateTime`, built from `Clock.time()` if it should be fakeable (`DateTime.fromUnixTimestamp(Clock.time())`).
 
 ## Quick start
 
 ```luau
--- ServerScriptService/Systems/Autosave.luau (server)
+-- ServerScriptService/Systems/Shield.luau (server)
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
 local Clock = Hydrogen.Clock
-local DataSystem = require(script.Parent.Data) -- has Data.saveAll()
 
-return Hydrogen.define(function(use)
-	local Data = use(DataSystem)
-	local Autosave = { running = false }
+local COOLDOWN = 10
+local DURATION = 3
 
-	function Autosave:start()
-		Autosave.running = true
-		task.spawn(function()
-			while Autosave.running do
-				Clock.wait(60)
-				Data.saveAll()
-			end
+return Hydrogen.define(function()
+	local Shield = {}
+	local lastUse: { [Player]: number } = {}
+	-- Server time, so a client sent this value can draw the shield ending by itself.
+	local endsAt: { [Player]: number } = {}
+
+	function Shield.tryRaise(player: Player): boolean
+		local now = Clock.now()
+		local last = lastUse[player]
+		if last and now - last < COOLDOWN then
+			return false
+		end
+		lastUse[player] = now
+		endsAt[player] = Clock.serverNow() + DURATION
+		Clock.delay(DURATION, function()
+			endsAt[player] = nil
 		end)
+		return true
 	end
 
-	function Autosave:stop()
-		Autosave.running = false
+	function Shield.isUp(player: Player): boolean
+		return endsAt[player] ~= nil
 	end
 
-	return Autosave
+	function Shield:playerRemoving(player: Player)
+		lastUse[player] = nil
+		endsAt[player] = nil
+	end
+
+	return Shield
 end)
 ```
 
 ```luau
--- Tests/Autosave.spec.luau (test)
+-- Tests/Shield.spec.luau (test)
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
-local Autosave = require(ServerScriptService.Systems.Autosave)
-local DataSystem = require(ServerScriptService.Systems.Data)
+local Shield = require(ServerScriptService.Systems.Shield)
 
-local saves = 0
-Hydrogen.test({
-	systems = { Autosave },
-	replace = { [DataSystem] = { saveAll = function()
-		saves += 1
-	end } },
-}, function(t)
-	t:advance(59)
-	assert(saves == 0)
-	t:advance(5 * 60 - 59) -- every 60 s interval inside runs, instantly
-	assert(saves == 5)
+Hydrogen.test({ systems = { Shield }, players = 1 }, function(t, player)
+	assert(Shield.tryRaise(player))
+	assert(not Shield.tryRaise(player)) -- on cooldown
+	t:advance(3) -- the Clock.delay runs, instantly
+	assert(not Shield.isUp(player))
+	t:advance(7)
+	assert(Shield.tryRaise(player))
 end)
 ```
+
+For repeating work, use `Hydrogen.Scheduler.every(60, save):bind(self)` rather than a `Clock.wait` loop in `task.spawn`: it runs on `Clock`, so `t:advance` drives it the same way, and it stops when the system does.
 
 ## API
 
@@ -76,6 +88,11 @@ Clock.now(): number
 
 Clock.time(): number
 -- Unix seconds, an integer (os.time). For timestamps you save and dates.
+
+Clock.serverNow(): number
+-- Seconds on the server's clock, the same on the server and every client (workspace:GetServerTimeNow()).
+-- For timestamps one side sets and the other compares. Under the Lune runtime (no Roblox server clock)
+-- it reads os.clock, since one process plays both sides.
 
 Clock.wait(seconds: number?): number
 -- YIELDS. task.wait: resumes after seconds, or on the next frame without them (or with seconds <= 0).
@@ -100,8 +117,9 @@ Clock.active(): FakeClock?
 -- The installed fake clock, or nil.
 
 export type FakeClockOptions = {
-	now: number?,   -- what Clock.now() starts at; default 0
-	time: number?,  -- what Clock.time() starts at (Unix seconds); default the real os.time()
+	now: number?,        -- what Clock.now() starts at; default 0
+	time: number?,       -- what Clock.time() starts at (Unix seconds); default the real os.time()
+	serverNow: number?,  -- what Clock.serverNow() starts at; default the time value
 }
 
 export type FakeClock = {
@@ -109,6 +127,10 @@ export type FakeClock = {
 	next: (self: FakeClock) -> number?,                  -- jump to the next timer and run it; seconds advanced, or nil if none
 	pending: (self: FakeClock) -> number,                -- delays and timed waits still scheduled
 	now: (self: FakeClock) -> number,                    -- same as Clock.now()
+	serverNow: (self: FakeClock) -> number,              -- Clock.serverNow() as the server sees it (no client offset)
+	setServerOffset: (self: FakeClock, seconds: number, player: Player?) -> (),
+	-- shifts Clock.serverNow() for code running as that loopback client (t:as, its listeners) to simulate
+	-- skew and latency; without a player, every client with no offset of its own; 0 clears
 	restore: (self: FakeClock) -> (),                    -- put the built-ins back; idempotent
 }
 ```
@@ -131,6 +153,8 @@ Types are exported as `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Insi
 - **`advance(0)`** runs what is due now and steps exactly one frame. To simulate frames, loop: `for _ = 1, 60 do t:advance(1 / 60) end`.
 - **`advance` doesn't yield;** resumed threads run until their next yield before it returns. It rejects negative or NaN seconds. More than 100000 timers in one advance errors, which catches a timer that reschedules itself with no delay.
 - **Fake `Clock.time()`** is `floor(time + elapsed)`, an integer like `os.time()`.
+- **Fake `Clock.serverNow()`** is `serverNow + elapsed`, plus the offset of the loopback client the code runs as. An offset applies only inside that client's code: `t:as(player, fn)` and the listeners of events sent to it. Client code outside `t:as` (allowed with one fake client) has no known client, so it reads the server's time.
+- **`serverNow` vs `now`:** `Clock.now()` is per machine and starts anywhere, so never send it to the other side. `Clock.serverNow()` is shared, so it is what you replicate (`endsAt = Clock.serverNow() + 3`). On a real client it is an estimate that can be a few milliseconds off and may step; measure short durations on one side with `now`.
 - **Errors in timers and heartbeat listeners** are reported like errors in `task.spawn` threads and don't stop `advance`.
 - **`restore()`** puts the built-ins back and abandons every thread still waiting on the fake clock; they are never resumed. `Hydrogen.test` restores for you.
 - **One fake at a time,** VM-wide (like the loopback).
@@ -215,6 +239,16 @@ end)
 -- Test: for _ = 1, 60 do t:advance(1 / 60) end -> Ticker.elapsed is about 1.
 ```
 
+### A timestamp both sides agree on
+
+```luau
+-- server: send when the cast ends, once
+CastEnds:FireAll(player, Hydrogen.Clock.serverNow() + castTime)
+-- client: draw the bar every frame from the shared clock, with no more traffic
+local remaining = math.max(0, endsAt - Hydrogen.Clock.serverNow())
+-- Test with skew: t.clock:setServerOffset(0.15, player), then read it inside t:as(player, fn)
+```
+
 ### Saved timestamps
 
 ```luau
@@ -242,6 +276,7 @@ assert(ok, err)
 
 - Don't `local now = Hydrogen.Clock.now` at the top of a module. Do call `Hydrogen.Clock.now()` where you need it.
 - Don't use `task.wait(60)` / `task.delay` / `os.clock()` in game logic you want to test. Do use `Clock.wait`, `Clock.delay` and `Clock.now()`.
+- Don't send `Clock.now()` or `os.clock()` to the other side, or call `workspace:GetServerTimeNow()` directly. Do use `Clock.serverNow()`, which both sides share and the fake clock controls.
 - Don't use `Clock.now()` for saved timestamps (it's per-server and starts near 0 in tests). Do use `Clock.time()`.
 - Don't treat `Clock.heartbeat`'s return value as a connection (`:Disconnect()`). Do call it: `disconnect()`.
 - Don't `Clock.wait` on the test's own thread for a fake delay. It never resumes, because nothing advances. Do call `t:advance(seconds)`.
@@ -259,6 +294,7 @@ assert(ok, err)
 | Message | Meaning | Fix |
 | --- | --- | --- |
 | `A fake clock is already installed; restore it before installing another` | Second `Clock.fake()` | `restore()` the first, or inside `Hydrogen.test` use `t.clock` |
+| `setServerOffset expects a finite number of seconds` | NaN, `math.huge` or a non-number | Pass a finite number; 0 clears it |
 | `advance expects a non-negative number of seconds` | `advance(-1)`, `advance(nil)` or NaN | Pass seconds >= 0 |
 | `advance ran 100000 timers without reaching the target time; is a timer rescheduling itself with no delay?` | Something calls `Clock.delay(0, ...)` / `Clock.wait(0)`-style rescheduling in a loop inside one advance | Give the loop a real interval, or wait for the next frame with `Clock.wait()` |
 | `t:advance needs the fake clock, but this test was opened with clock = false` | Harness opened with real time | Remove `clock = false` |

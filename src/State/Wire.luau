@@ -24,6 +24,9 @@ end
 local function fields(kind: string, wireSchema: any, keySchema: any): { any }
 	if kind == "value" then
 		return { wireSchema }
+	elseif kind == "meter" then
+		-- (value, rate, min, max, at)
+		return { gt.number(), gt.number(), gt.number(), gt.number(), gt.number() }
 	elseif kind == "map" then
 		return { gt.boolean(), gt.array(keySchema), gt.array(wireSchema), gt.array(keySchema) }
 	end

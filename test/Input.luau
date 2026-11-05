@@ -74,6 +74,12 @@ return function()
 	local Back = Menu:button("Back", { Key.Backspace, Key.ButtonB })
 	local Throttle = Vehicle:axis("Throttle", { { positive = Key.W, negative = Key.S }, Key.ButtonR2 })
 	local Wave = Input.button("Wave", { Key.G })
+	-- Buffering: a combo attack, and a dialog that sinks the mouse button above it.
+	local Combat = Input.context("Combat")
+	local Dialog = Input.context("Dialog", { priority = 20, sink = true, enabled = false })
+	local Attack = Combat:button("Attack", { Enum.UserInputType.MouseButton1, Key.ButtonR1 }, { buffer = 0.15 })
+	local Advance = Dialog:button("Advance", { Enum.UserInputType.MouseButton1 })
+	local MouseButton1 = Enum.UserInputType.MouseButton1
 
 	test.on_test_leave(function()
 		Input.reset()
@@ -246,6 +252,163 @@ return function()
 			local ok, err = pcall(Gameplay.vector2, Gameplay, "BadMove2", { Key.Space })
 			check.equal(ok, false)
 			check.equal(string.find(tostring(err), "[HYDROGEN] Input action BadMove2 (vector2): binding 1", 1, true) ~= nil, true)
+			return nil
+		end)
+	end)
+
+	test.suite("Input buffering", function()
+		test.case("a buffered press is consumed once within the window", function()
+			Hydrogen.test({}, function(t)
+				check.equal(Attack:consumeBuffered(), false)
+				simulate.tap(MouseButton1)
+				t:advance(0.1)
+				check.equal(Attack:consumeBuffered(), true)
+				check.equal(Attack:consumeBuffered(), false)
+			end)
+			return nil
+		end)
+
+		test.case("a buffered press expires after the window", function()
+			Hydrogen.test({}, function(t)
+				simulate.tap(MouseButton1)
+				t:advance(0.2)
+				check.equal(Attack:consumeBuffered(), false)
+				-- A newer press restarts the window.
+				simulate.tap(MouseButton1)
+				t:advance(0.1)
+				simulate.tap(Key.ButtonR1)
+				t:advance(0.1)
+				check.equal(Attack:consumeBuffered(), true)
+			end)
+			return nil
+		end)
+
+		test.case("only a press that begins the action is buffered", function()
+			Hydrogen.test({}, function(t)
+				simulate.press(MouseButton1)
+				check.equal(Attack:consumeBuffered(), true)
+				-- Still held, and a second binding pressed while held, is not a new press.
+				simulate.press(Key.ButtonR1)
+				check.equal(Attack:consumeBuffered(), false)
+				simulate.release(MouseButton1)
+				simulate.release(Key.ButtonR1)
+				-- Sources and touch buttons press it like keys do.
+				local source = Input.source(Attack)
+				source:press()
+				source:release()
+				check.equal(Attack:consumeBuffered(), true)
+			end)
+			return nil
+		end)
+
+		test.case("a press during recovery fires when recovery ends, without double firing", function()
+			Hydrogen.test({}, function(t)
+				local attacks = 0
+				local recovering = false
+				local recovery = 0.4
+				local function tryAttack()
+					if recovering or not Attack:consumeBuffered() then
+						return
+					end
+					attacks += 1
+					recovering = true
+					Hydrogen.Clock.delay(recovery, function()
+						recovering = false
+						tryAttack()
+					end)
+				end
+				Attack:onBegan(tryAttack)
+
+				simulate.tap(MouseButton1)
+				check.equal(attacks, 1)
+				-- Pressed late in the recovery: fires as it ends.
+				t:advance(0.3)
+				simulate.tap(MouseButton1)
+				check.equal(attacks, 1)
+				t:advance(0.1)
+				check.equal(attacks, 2)
+				-- Pressed too early in the recovery: lost.
+				t:advance(0.1)
+				simulate.tap(MouseButton1)
+				t:advance(0.3)
+				check.equal(attacks, 2)
+				t:advance(1)
+				check.equal(attacks, 2)
+				-- A recovery shorter than the buffer doesn't reuse the press that started it.
+				recovery = 0.1
+				simulate.tap(MouseButton1)
+				check.equal(attacks, 3)
+				t:advance(0.1)
+				check.equal(recovering, false)
+				check.equal(attacks, 3)
+			end)
+			return nil
+		end)
+
+		test.case("disabling the context clears the buffer", function()
+			Hydrogen.test({}, function(t)
+				simulate.tap(MouseButton1)
+				Combat:disable()
+				Combat:enable()
+				check.equal(Attack:consumeBuffered(), false)
+
+				local scope = Scope.new("Cutscene")
+				simulate.tap(MouseButton1)
+				Combat:disableFor(scope)
+				scope:destroy()
+				check.equal(Attack:consumeBuffered(), false)
+
+				-- Presses while disabled are never buffered.
+				Combat:disable()
+				simulate.tap(MouseButton1)
+				Combat:enable()
+				check.equal(Attack:consumeBuffered(), false)
+
+				simulate.tap(MouseButton1)
+				Input.reset()
+				check.equal(Attack:consumeBuffered(), false)
+			end)
+			return nil
+		end)
+
+		test.case("a press a higher context sinks is not buffered; rebinding keeps a buffered press", function()
+			Hydrogen.test({}, function(t)
+				Dialog:enable()
+				simulate.tap(MouseButton1)
+				check.equal(Attack:consumeBuffered(), false)
+				Dialog:disable()
+
+				simulate.tap(MouseButton1)
+				Attack:rebind(Enum.UserInputType.MouseButton2)
+				check.equal(Attack:consumeBuffered(), true)
+				check.equal(Advance:held(), false)
+			end)
+			return nil
+		end)
+
+		test.case("buffer errors say what is wrong", function()
+			local function message(fn: () -> ()): string
+				local ok, err = pcall(fn)
+				check.equal(ok, false)
+				return tostring(err)
+			end
+			local function has(text: string, expected: string): boolean
+				return string.find(text, expected, 1, true) ~= nil
+			end
+			check.equal(has(message(function()
+				Jump:consumeBuffered()
+			end), `[HYDROGEN] Input action Jump has no buffer; define it with \{ buffer = seconds }`), true)
+			check.equal(has(message(function()
+				Zoom:consumeBuffered()
+			end), "[HYDROGEN] Input action Zoom is an axis; consumeBuffered is for button actions"), true)
+			check.equal(has(message(function()
+				Gameplay:axis("BadBufferAxis", { Key.Q }, { buffer = 0.1 } :: any)
+			end), "[HYDROGEN] Input action BadBufferAxis: buffer is for button actions"), true)
+			for _, bad in { 0, -1, 0 / 0, math.huge, "0.1" } :: { any } do
+				check.equal(has(message(function()
+					Gameplay:button("BadBuffer", { Key.Q }, { buffer = bad })
+				end), "[HYDROGEN] Input action BadBuffer: buffer must be a positive number of seconds"), true)
+			end
 			return nil
 		end)
 	end)
