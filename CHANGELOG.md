@@ -12,6 +12,7 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 ### Changed
 
 - The docs now say to register network listeners (`:On`, `:Use`) in `init`, everywhere. The network starts between `init` and `start`, and a client handles the events queued for it right then, so a listener added in `start` could miss them silently. `systems.md`, `network.md`, `scope.md`, the README and the `create_hydrogen` example systems said `start`; `testing.md` and `guards.md` already said `init`.
+- `create_hydrogen` 0.1.2: new projects pin Hydrogen `^0.5.1`, and the example systems register their listeners in `init`.
 
 ### Fixed
 
