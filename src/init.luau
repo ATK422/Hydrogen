@@ -64,6 +64,11 @@ export type Computed<T> = State.Computed<T>
 export type StateOptions = State.Options
 export type PlayerStateOptions = State.PlayerOptions
 export type StateSerializer = State.Serializer
+export type StateMeter = State.Meter
+export type PlayerMeter = State.PlayerMeter
+export type MeterOptions = State.MeterOptions
+export type PlayerMeterOptions = State.PlayerMeterOptions
+export type MeterLimit = State.MeterLimit
 
 export type Receipt = Receipts.Receipt
 export type PurchaseDecision = Receipts.Decision

@@ -1,5 +1,5 @@
 # Hydrogen.State
-> Server-authoritative state replicated to clients (global values, per-player values, maps, lists, derived values); reach for it whenever clients need to see and react to data the server owns.
+> Server-authoritative state replicated to clients (global values, per-player values, maps, lists, meters that move over time, derived values); reach for it whenever clients need to see and react to data the server owns.
 
 ## Use it when / Don't use it when
 
@@ -7,12 +7,14 @@ Use it when:
 - Clients must display or react to server-owned data: round phase, timers, coins, levels, teams, scores, inventories, quest logs.
 - Late joiners must see the current state without extra code.
 - Collections change a little at a time and should be sent as diffs.
+- A number moves steadily over time (stamina, mana, posture, hunger, temperature, a capture bar): use a meter (`State.meter` / `State.playerMeter`). It sends only when the rate or value jumps, and each side works out the value now.
 
 Don't use it when:
 - The data is a one-off happening (a hit, a sound, a chat line): fire a `Hydrogen.serverEvent`.
 - The client asks for data on demand: use `Hydrogen.clientFunction`.
 - The data is server-only: keep it in a plain table in your system.
 - It changes every frame per unit (positions, a battle frame): use an `:Unreliable():Encode()` serverEvent. State is reliable and ordered.
+- A number that drains or refills on a timer: don't `set` it every tick. Use a meter and set its rate once.
 - It must be saved: use `Hydrogen.Data` (persistence) and replicate the fields that clients need, through State or PlayerState.
 - The client should write it: State is written by the server only. Send a `clientEvent` and let the server write.
 
@@ -30,6 +32,7 @@ return {
 	Coins = State.playerValue("Coins", gt.number(), 0), -- only the owner sees it
 	Level = State.playerValue("Level", gt.number(), 1, { visibleTo = "everyone" }),
 	Inventory = State.playerMap("Inventory", gt.string(), gt.number()),
+	Stamina = State.playerMeter("Stamina", { max = 100, rate = 10 }), -- refills 10/s; sent only on changes
 }
 ```
 
@@ -91,6 +94,8 @@ Constructors (`Hydrogen.State.*`):
 - `playerValue<T>(name: string, schema: T, initial: T, options: PlayerOptions?): PlayerValue<T>`: one value per player.
 - `playerMap<K, V>(name: string, keySchema: K, valueSchema: V, options: PlayerOptions?): PlayerMap<K, V>`: one map per player.
 - `playerList<T>(name: string, itemSchema: T, options: PlayerOptions?): PlayerList<T>`: one list per player.
+- `meter(name: string, options: MeterOptions): StateMeter`: one global number moving at a rate between min and max.
+- `playerMeter(name: string, options: PlayerMeterOptions): PlayerMeter`: one meter per player; optional client prediction.
 - `computed<T>(compute: () -> T): Computed<T>`: derived from other state; never sent; may be created anywhere, anytime.
 - `flush(): ()`: server; sends every pending change now instead of at the end of the frame.
 - `reset(): ()`: tests only; every state back to its initial value on the server and in every replica, and all observers dropped.
@@ -100,6 +105,22 @@ Options:
 type Options = { encode: boolean?, serializer: StateSerializer? }
 type PlayerOptions = { visibleTo: ("owner" | "everyone")?, encode: boolean?, serializer: StateSerializer? } -- visibleTo defaults to "owner"
 type StateSerializer = { schema: any, serialize: (value: any) -> any, deserialize: (wire: any) -> any }
+```
+Meter options (no schema: a meter is always a number):
+```luau
+type MeterOptions = {
+	min: number?,   -- default 0
+	max: number,    -- required
+	value: number?, -- initial value, default max; must be within [min, max]
+	rate: number?,  -- initial units per second, default 0; negative drains
+	encode: boolean?,
+}
+type PlayerMeterOptions = {
+	min: number?, max: number, value: number?, rate: number?, encode: boolean?,
+	visibleTo: ("owner" | "everyone")?, -- default "owner"
+	predict: boolean?,                  -- default false; lets the owning client predictRate / predictAdd
+	predictTimeout: number?,            -- seconds, default 1; only with predict = true
+}
 ```
 - `encode = true`: calls `:Encode()` on the state's event (schema-driven buffer packing).
 - `serializer`: values travel as `serialize(value)` and are checked against `serializer.schema` on the wire. Writes are still checked against the state's own schema. The client stores `deserialize(wire)`.
@@ -131,11 +152,27 @@ Every state object has `name: string` and `event: ServerEvent<...any>` (the unde
 - `Inventory:set(player: Player, key: K, value: V?)`, `Inventory:observeKey(player: Player, key: K, observer)`, `Quests:insert(player: Player, index: number, value: T)`.
 - Plus `observeAll(self, observer: (player: Player, ...) -> ()): () -> ()` with no player argument. It covers every player, called now for each player whose state exists on this side, then on each change. Its arguments after `player` are what that kind's `observe` gets: `(player, value, previous)`, `(player, entries)` or `(player, items)`.
 
+`StateMeter` (global meter):
+- `get(self): number`: both sides; the value now: `clamp(value + rate * (Clock.serverNow() - at), min, max)` from the last change. Cheap; call it every frame for UI.
+- `getRate(self): number`, `getRange(self): (number, number)`: both sides; units per second, and `(min, max)`.
+- `set(self, value: number): ()`: server; an instant change, clamped; the rate carries on from it.
+- `add(self, delta: number): ()`: server; `set(get() + delta)`.
+- `setRate(self, rate: number): ()`: server; the value carries on from where it is now at the new rate.
+- `setRange(self, min: number, max: number): ()`: server; the value is clamped into the new range.
+- `observe(self, observer: (value: number, rate: number) -> ()): () -> ()`: both sides; calls now, then on each change (a write, an update arriving, a prediction or its expiry). Never as time passes.
+- `onLimit(self, listener: (limit: "min" | "max") -> ()): () -> ()`: both sides; called each time the value arrives at min or max, by its rate (on time, from one `Clock.delay`) or by a change. Not called for where it is when connected.
+
+`PlayerMeter`: the same methods with `player: Player` first (`Stamina:get(player)`, `Stamina:setRate(player, -20)`, `Stamina:onLimit(player, fn)`), plus:
+- `sync(self, player: Player): ()`: server; sends the segment again though nothing changed, so the owner's prediction is replaced now (use it when turning a request down).
+- `predictRate(self, player: Player, rate: number): ()`: owning client only, needs `predict = true`; shows the new rate locally from `Clock.serverNow()`.
+- `predictAdd(self, player: Player, delta: number): ()`: owning client only, needs `predict = true`; shows an instant change locally.
+- `observeAll(self, observer: (player: Player, value: number, rate: number) -> ()): () -> ()`.
+
 `Computed<T>`:
 - `get(self): T`: computes now; not cached.
 - `observe(self, observer: (value: T, previous: T?) -> ()): () -> ()`: calls now, then whenever a state it read changes and the result differs.
 
-Exported types: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions`, `Hydrogen.StateSerializer`.
+Exported types: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions`, `Hydrogen.StateSerializer`, `Hydrogen.StateMeter`, `Hydrogen.PlayerMeter`, `Hydrogen.MeterOptions`, `Hydrogen.PlayerMeterOptions`, `Hydrogen.MeterLimit` (`"min" | "max"`).
 
 Nothing in State yields. Observers run synchronously on a reused thread; if one yields, the write that triggered it does not wait.
 
@@ -161,6 +198,18 @@ Nothing in State yields. Observers run synchronously on a reused thread; if one 
 - Computed state must not yield. It depends on whatever it read on its last run, including reads through other computed state. On the client it reads replicas.
 - Cost: nothing until the server first uses State (then two `Players` connections). Nothing per frame while idle. Writes, schema checks and observers are O(1) per change. Map and list `observe` copy the collection per change, only when observed.
 - Under loopback (tests), each fake client has its own replica. Code inside `net:as(player, fn)` reads that client's copy; code outside reads the server's. Client systems' `start` runs outside `as`, so it reads server values.
+
+Meters:
+- A meter is a segment `(value, rate, min, max, at)`: the value at server time `at` and its rate. Every write rebases it at `Clock.serverNow()` from the current extrapolated value, and that segment is what is sent. Nothing is sent, scheduled or computed while time passes; `get()` does the arithmetic.
+- Only `set`, `add`, `setRate`, `setRange` and `sync` send, coalesced like other state (one message per meter, or per player, per frame). A write that changes nothing (same rate, same value now, same range) sends nothing.
+- Values are clamped to `[min, max]`: writes clamp, and extrapolation stops at the limit. Changing the rate at a limit starts from the limit, not from where the value "would have been".
+- Observers fire on changes, not as time passes. UI that shows the number reads `get()` each frame (`RunService.RenderStepped`); use `observe` for things that happen on a change (rate turned negative: play a drain effect).
+- Clients extrapolate with `Clock.serverNow()` (`workspace:GetServerTimeNow()`). A client whose clock runs behind holds the value until it reaches `at` instead of running backwards; one running ahead sees it slightly further on. The error is the clock skew times the rate.
+- The initial `rate` runs from when the server first uses the meter, per player for `playerMeter`: the player's join (when they start receiving state) or the first server read or write, whichever comes first. Before any data arrives a client shows the initial value at rest.
+- `onLimit` costs nothing until a listener connects. With listeners, each watched meter holds at most one `Clock.delay`, for the moment the value reaches the limit it is heading for; every change reschedules it. Each arrival is reported once; staying at a limit is not reported again. It is per side: server listeners follow the server's value, client listeners the client's (including its prediction).
+- Prediction (`playerMeter` with `predict = true`) is a local view only. `predictRate` / `predictAdd` change what the owning client's `get`, `getRate`, `observe` and `onLimit` show, starting at that client's `Clock.serverNow()`. They never reach the server: pair each with a `clientEvent` the server handles by calling `setRate` / `add`. The next segment from the server replaces the prediction, whatever it says (that is the confirmation or the correction). With no segment within `predictTimeout` (default 1 s), the prediction is dropped and the server's view shows again. A server write unrelated to the request also replaces it, so a prediction may end early; `sync(player)` forces a correction without changing anything.
+- A player leaving: clients drop their meter (and its limit timers); the server keeps it readable and extrapolating for later `playerRemoving` hooks; writes after leaving are not sent.
+- Computed state that reads a meter recomputes on the meter's changes only, not as its value moves.
 
 ## Recipes
 
@@ -241,6 +290,132 @@ local Wallet = State.value("Wallet", gt.any(), money(0), {
 
 Log one state's traffic: `GameState.Inventory.event:Use(Hydrogen.logger())`.
 
+Stamina with client prediction (meter + clientEvent): the client shows sprinting at once, the server decides.
+```luau
+-- ReplicatedStorage/Network/Movement.luau (shared)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local State, gt = Hydrogen.State, Hydrogen.gt
+
+return {
+	-- Full at 100, refills 10/s from the moment the player joins.
+	Stamina = State.playerMeter("Stamina", { max = 100, rate = 10, predict = true }),
+	Sprint = Hydrogen.clientEvent("Sprint", gt.boolean()),
+}
+```
+```luau
+-- ServerScriptService/Systems/Sprinting.luau (server)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local Movement = require(ReplicatedStorage.Network.Movement)
+
+local DRAIN = -25
+local REFILL = 10
+
+return Hydrogen.define(function()
+	local Sprinting = {}
+
+	function Sprinting:init()
+		Movement.Sprint:On(function(player: Player, sprinting: boolean)
+			if not sprinting then
+				Movement.Stamina:setRate(player, REFILL)
+			elseif Movement.Stamina:get(player) > 0 then
+				Movement.Stamina:setRate(player, DRAIN) -- confirms the client's prediction
+			else
+				Movement.Stamina:sync(player) -- refused: replace the prediction now, not after the timeout
+			end
+		end)
+	end
+
+	function Sprinting:playerAdded(player: Player)
+		-- Fires once, at the moment stamina runs out; no polling.
+		Hydrogen.Scope.of(self, player):add(Movement.Stamina:onLimit(player, function(limit: Hydrogen.MeterLimit)
+			if limit == "min" then
+				Movement.Stamina:setRate(player, REFILL)
+			end
+		end))
+	end
+
+	return Sprinting
+end)
+```
+```luau
+-- ReplicatedStorage/ClientSystems/SprintInput.luau (client)
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+local Movement = require(ReplicatedStorage.Network.Movement)
+
+return Hydrogen.define(function()
+	local SprintInput = {}
+
+	function SprintInput:start()
+		local player = Players.LocalPlayer
+		local bar = player:WaitForChild("PlayerGui"):WaitForChild("Hud"):WaitForChild("StaminaBar") :: Frame
+
+		UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+			if not processed and input.KeyCode == Enum.KeyCode.LeftShift then
+				Movement.Stamina:predictRate(player, -25) -- shown now
+				Movement.Sprint:Fire(true) -- the server makes it real
+			end
+		end)
+		UserInputService.InputEnded:Connect(function(input: InputObject)
+			if input.KeyCode == Enum.KeyCode.LeftShift then
+				Movement.Stamina:predictRate(player, 10)
+				Movement.Sprint:Fire(false)
+			end
+		end)
+
+		-- Observers only fire on changes: read get() each frame for a smooth bar.
+		RunService.RenderStepped:Connect(function()
+			local _, max = Movement.Stamina:getRange(player)
+			bar.Size = UDim2.fromScale(Movement.Stamina:get(player) / max, 1)
+		end)
+	end
+
+	return SprintInput
+end)
+```
+
+Spend mana on a cast, predicted (`Mana = State.playerMeter("Mana", { max = 100, rate = 5, predict = true })`, `Cast = Hydrogen.clientEvent("Cast", gt.string())`):
+```luau
+-- client
+if GameState.Mana:get(Players.LocalPlayer) >= 30 then
+	GameState.Mana:predictAdd(Players.LocalPlayer, -30)
+	GameState.Cast:Fire("Fireball")
+end
+
+-- server
+GameState.Cast:On(function(player: Player, spell: string)
+	if GameState.Mana:get(player) < 30 then
+		GameState.Mana:sync(player) -- correct the client
+		return
+	end
+	GameState.Mana:add(player, -30)
+end)
+```
+
+Hunger that drains on its own, starving at zero (`Hunger = State.playerMeter("Hunger", { max = 100, rate = -0.2 })`):
+```luau
+function Survival:playerAdded(player: Player)
+	Hydrogen.Scope.of(self, player):add(GameState.Hunger:onLimit(player, function(limit: Hydrogen.MeterLimit)
+		if limit == "min" then
+			print(player.Name, "is starving") -- start damage here
+		end
+	end))
+end
+
+local function eat(player: Player, food: number)
+	GameState.Hunger:add(player, food) -- clamped at max
+end
+```
+
+Upgrade max stamina, keeping the current value: `GameState.Stamina:setRange(player, 0, 150)`.
+
+A global capture bar everyone sees (`Capture = State.meter("Capture", { min = -100, max = 100, value = 0 })`): the server calls `GameState.Capture:setRate(10 * (redCount - blueCount))` when someone enters or leaves the zone, and clients draw `GameState.Capture:get()` every frame.
+
 ## Mistakes
 
 - Don't mutate a table you got from State (`GameState.Scores:all().red = 5`, or `local inv = Inventory:all(player); inv.sword = 2`). `all` returns a copy, so nothing changes or replicates. Use `Scores:set("red", 5)`, `Inventory:update(player, "sword", fn)` or `Scores:replace(newTable)`.
@@ -255,6 +430,12 @@ Log one state's traffic: `GameState.Inventory.event:Use(Hydrogen.logger())`.
 - Don't yield inside `State.computed`, and don't read state you don't want as a dependency inside it.
 - Don't expect `observeAll` to report players whose state was never written. They have `initial`. Handle "no entry yet" as the initial value.
 - Don't disconnect by setting observers to nil. Call the function `observe` returned.
+- Don't `set` a meter every tick to drain it (`while true do Stamina:add(player, -1) task.wait(0.1) end`). That sends ten messages a second and still lags. Call `setRate(player, -10)` once.
+- Don't draw a meter's bar from `observe`; it fires only on changes, so the bar would freeze between them. Read `get()` in `RenderStepped`.
+- Don't compute a meter's value from `os.clock()`, `tick()` or the time an update arrived. Use `get()`, which uses `Clock.serverNow()` and the segment's `at`.
+- Don't expect `predictRate` / `predictAdd` to change server state. Fire a `clientEvent` and let the server `setRate` / `add`; the client only changes its own view.
+- Don't poll `get()` to detect empty or full on the server (`Heartbeat` checks). Use `onLimit`.
+- Don't use a meter for a number that only jumps (coins, level). A `playerValue` is simpler; meters are for values with a rate.
 
 ## Testing
 
@@ -285,6 +466,30 @@ Hydrogen.State.reset() -- values are module singletons: reset between tests
 - `app:replace` works as usual for systems that write state. State itself is not a system and is never replaced.
 - `Hydrogen.test` calls `State.reset()` when it closes, and State's end-of-frame send runs on the harness's fake clock: it goes out on the next `t:advance` (`t:advance(0)` is one frame). Without a fake clock, headless, it runs deferred.
 
+Meters under `Hydrogen.test`: the fake clock drives `Clock.serverNow()`, so `t:advance(seconds)` moves meters on every side, and `onLimit` and prediction timeouts fire during the advance. Start it at a known time with `clock = { serverNow = 1000 }`. Skew one client's server clock with `t.clock:setServerOffset(seconds, player)` (positive = ahead). Predict inside `t:as(player, ...)`.
+```luau
+Hydrogen.test({ systems = { Sprinting }, players = { "Alice" }, clock = { serverNow = 0 } }, function(t, alice)
+	local Stamina = Movement.Stamina
+	Stamina:set(alice, 50)
+	Stamina:setRate(alice, -10)
+	t:advance(0) -- one frame: the segment is sent
+	t:advance(2) -- time passing: nothing is sent
+	assert(Stamina:get(alice) == 30)
+	assert(t:as(alice, Stamina.get, Stamina, alice) == 30)
+
+	local clock = t.clock :: Hydrogen.FakeClock
+	clock:setServerOffset(0.1, alice) -- Alice's clock reads 0.1 s ahead
+	t:as(alice, function()
+		Stamina:predictRate(alice, 10) -- shown on Alice's client only
+		Movement.Sprint:Fire(false)    -- the server sets REFILL
+	end)
+	t:advance(0)
+	assert(Stamina:getRate(alice) == 10)
+end)
+```
+- Count a meter's messages with middleware on `Stamina.event`, as above; time passing must add none.
+- Test a prediction the server ignores by advancing past `predictTimeout` without a server write: the client's `getRate` returns to the server's.
+
 ## Errors and warnings
 
 Errors (raised at the caller's line):
@@ -300,6 +505,13 @@ Errors (raised at the caller's line):
 - `[HYDROGEN] State <name>: options must be a table` / `visibleTo only applies to per-player state ...` / `visibleTo must be "owner" or "everyone", got <x>` / `serializer needs schema, serialize and deserialize`: fix the options.
 - `[HYDROGEN] State <name>: the initial value doesn't match the schema: ...`: fix `initial`, or use `gt.optional(...)` for nil.
 - `[HYDROGEN] State.computed expects a function`.
+- `[HYDROGEN] State <name>: <set|add|setRate|setRange|predictRate|predictAdd> expects a finite number, got <x>`: NaN, infinity or a non-number. Check the arithmetic that produced it (a division by zero gives inf or NaN).
+- `[HYDROGEN] State <name>: setRange got min (<a>) greater than max (<b>)`: swap them.
+- `[HYDROGEN] State <name>: onLimit expects a function, got <type>`.
+- `[HYDROGEN] State <name>: <predictRate|predictAdd> needs predict = true in the playerMeter options`: add `predict = true` to the definition.
+- `[HYDROGEN] State <name>: <predictRate|predictAdd> runs on the client that owns the meter; the server changes it with <setRate|add>`: called on the server (or outside `t:as` in a test). On the server write the real value.
+- `[HYDROGEN] State <name>: a client can only predict its own meter; pass Players.LocalPlayer, got <name>`: predict only the local player's meter.
+- Meter definitions: `meter option <min|max|value|rate> must be a finite number[, e.g. { max = 100 }], got <x>`, `meter min (<a>) is greater than max (<b>)`, `the initial value <v> is outside the meter's range (<min> to <max>)`, `unknown meter option <key>; meters take <list>` (usually a typo), `<predict|predictTimeout> only applies to State.playerMeter (...)`, `predict must be true or false`, `predictTimeout only applies with predict = true`, `predictTimeout must be a positive number of seconds`. Fix the options.
 - `[HYDROGEN] Network object State/<name> is already registered; ...`: a network object already uses that name. Rename.
 
 Warnings:
@@ -309,6 +521,7 @@ Warnings:
 - `[HYDROGEN] State could not tell clients that <player> left: <error>`: should not happen. Report it.
 - `[HYDROGEN] State <name> received a map change with <k> keys and <v> values; ignored` / `... received a list change that doesn't fit the list ...`: the client's replica disagrees with the server, usually from mismatched definitions or a bad middleware. Check that both sides define the same states.
 - `[HYDROGEN] Dropped invalid State/<name> from server: ...`: the client's schema differs from the server's. The definitions don't match.
+- `[HYDROGEN] State <name> received a meter segment that isn't finite numbers with min <= max; ignored`: a middleware or mismatched definition changed the payload. Check both sides define the same meter.
 - `[HYDROGEN] NETWORK MISMATCH ...`: the sides registered different names. A state (or network object) is defined on one side only.
 
 ## Works with
@@ -319,3 +532,4 @@ Warnings:
 - **Data (`Hydrogen.Data`):** persistence. Load in `playerAdded`, then `set` the fields clients need. State is not saved.
 - **Scope (`Hydrogen.Scope`):** `observe`, `observeKey`, `onChange` and `observeAll` return disconnect functions, so pass them to a scope: `Hydrogen.Scope.of(self):add(GameState.Round:observe(fn))`, or `Hydrogen.Scope.of(self, player):add(...)` for per-player observers.
 - **Testing (`Hydrogen.loopback` and `Hydrogen.test`):** see Testing. The harness's fake clock drives State's end-of-frame send.
+- **Clock (`Hydrogen.Clock`):** meters timestamp with `Clock.serverNow()` and time `onLimit` and prediction expiry with `Clock.delay`, so the fake clock and `setServerOffset` control them in tests.

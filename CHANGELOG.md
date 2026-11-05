@@ -4,6 +4,10 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 
 ## Unreleased
 
+### Added
+
+- Meters in `Hydrogen.State`: `State.meter(name, options)` and `State.playerMeter(name, options)` for numbers that move at a steady rate between a min and a max (stamina, mana, posture, hunger, temperature). The state is a segment `(value, rate, min, max, at)` replicated only when it jumps (`set`, `add`, `setRate`, `setRange`), with `at` in `Clock.serverNow()` time; `get()` on either side extrapolates to now and clamps, so time passing sends nothing and costs nothing. `getRate`, `getRange`, `observe` (on changes only) and `onLimit` (called when the value reaches min or max, from one `Clock.delay` rescheduled on change). Per-player meters take `visibleTo`, have `observeAll`, and with `predict = true` let the owning client `predictRate` / `predictAdd` its own view until the next server update replaces it or `predictTimeout` passes; the server can `sync(player)` to correct a prediction at once. Late joiners get the current segment; a client whose clock is behind holds the value instead of running it backwards. Types `StateMeter`, `PlayerMeter`, `MeterOptions`, `PlayerMeterOptions` and `MeterLimit`.
+
 ### Fixed
 
 - `create_hydrogen` 0.1.1: on macOS and Linux, a missing git, Rokit or pesde is reported with its install instructions. 0.1.0 only recognized Windows' "program not found" and treated the tool as installed but failing.
