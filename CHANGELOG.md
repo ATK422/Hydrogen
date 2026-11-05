@@ -4,6 +4,10 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 
 ## Unreleased
 
+### Added
+
+- Input buffering on button actions: `context:button(name, bindings, { buffer = seconds })` remembers each press for `buffer` seconds (timed with `Hydrogen.Clock`), and `action:consumeBuffered(): boolean` takes it once, so a combo press made during recovery fires when the recovery ends. Disabling the action's context clears the buffered press; sunk presses are never buffered. No per-frame work.
+
 ### Fixed
 
 - `create_hydrogen` 0.1.1: on macOS and Linux, a missing git, Rokit or pesde is reported with its install instructions. 0.1.0 only recognized Windows' "program not found" and treated the tool as installed but failing.

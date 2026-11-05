@@ -40,6 +40,9 @@ export type ActionState = {
 	_bindings: { [string]: { Spec } },
 	_deadzone: number?,
 	_touch: Types.TouchOptions?,
+	-- Button with a buffer option: how long a press stays usable, and when the last unused one began.
+	_buffer: number?,
+	_bufferedAt: number?,
 	_value: any,
 	-- Button: what is pressing it (a key name or a Source), and how many.
 	_sources: { [any]: boolean },
@@ -283,6 +286,10 @@ local function setValue(action: ActionState, value: any)
 	fire(action._changed, `action {action.name} onChanged`, value, previous)
 	if wasZero and not nowZero then
 		action._generation += 1
+		-- Before onBegan, so a listener can consume the press it was called for.
+		if action._buffer then
+			action._bufferedAt = Clock.now()
+		end
 		startHolds(action)
 		fire(action._began, `action {action.name} onBegan`, value)
 	elseif nowZero and not wasZero then
@@ -776,7 +783,7 @@ function Core.context(name: string, options: Types.ContextOptions?, level: numbe
 end
 
 local OPTIONS: { [Kind]: { [string]: boolean } } = {
-	button = { touch = true },
+	button = { touch = true, buffer = true },
 	axis = { deadzone = true },
 	vector2 = { deadzone = true },
 }
@@ -808,6 +815,8 @@ function Core.define(context: ContextState, kind: Kind, name: string, bindings: 
 		if not OPTIONS[kind][field] then
 			if field == "touch" then
 				error(`[HYDROGEN] Input action {name}: touch buttons are for button actions; drive a {kind} from your own control with Input.source`, level)
+			elseif field == "buffer" then
+				error(`[HYDROGEN] Input action {name}: buffer is for button actions; {if kind == "axis" then "an axis" else "a vector2"} has no presses to remember`, level)
 			end
 			error(`[HYDROGEN] Input action {name} ({kind}) has no option {field}`, level)
 		end
@@ -827,6 +836,11 @@ function Core.define(context: ContextState, kind: Kind, name: string, bindings: 
 		error(`[HYDROGEN] Input action {name}: deadzone must be a number from 0 up to (not including) 1`, level)
 	end
 
+	local buffer = settings.buffer
+	if buffer ~= nil and (type(buffer) ~= "number" or not (buffer > 0) or buffer == math.huge) then
+		error(`[HYDROGEN] Input action {name}: buffer must be a positive number of seconds, e.g. \{ buffer = 0.15 }`, level)
+	end
+
 	defined += 1
 	local action: ActionState = setmetatable({
 		name = name,
@@ -837,6 +851,8 @@ function Core.define(context: ContextState, kind: Kind, name: string, bindings: 
 		_bindings = copyBindings(defaults),
 		_deadzone = deadzone,
 		_touch = touch,
+		_buffer = buffer,
+		_bufferedAt = nil,
 		_value = zero(kind),
 		_sources = {},
 		_pressed = 0,
@@ -893,6 +909,12 @@ local function updateContext(context: ContextState)
 		return
 	end
 	context._active = active
+	if not active then
+		-- A press from before a menu opened mustn't fire when it closes.
+		for _, action in context._actions do
+			action._bufferedAt = nil
+		end
+	end
 	reconcile()
 end
 
@@ -1255,6 +1277,22 @@ function ActionMethods.observeGlyph(self: ActionState, observer: any): () -> ()
 	return disconnect
 end
 
+function ActionMethods.consumeBuffered(self: ActionState): boolean
+	local buffer = self._buffer
+	if buffer == nil then
+		if self.kind ~= "button" then
+			error(`[HYDROGEN] Input action {self.name} is {if self.kind == "axis" then "an axis" else "a vector2"}; consumeBuffered is for button actions defined with \{ buffer = seconds }`, 2)
+		end
+		error(`[HYDROGEN] Input action {self.name} has no buffer; define it with \{ buffer = seconds }, e.g. context:button("{self.name}", bindings, \{ buffer = 0.15 })`, 2)
+	end
+	local at = self._bufferedAt
+	if at == nil then
+		return false
+	end
+	self._bufferedAt = nil
+	return Clock.now() - at <= buffer
+end
+
 function ActionMethods.touchButton(self: ActionState): GuiButton?
 	local touchButton = Core.touchButton
 	return if touchButton then touchButton(self) else nil
@@ -1425,6 +1463,7 @@ function Core.reset()
 		action._pressed = 0
 		action._sourceValues = {}
 		action._delta = nil
+		action._bufferedAt = nil
 		action._value = zero(action.kind)
 		action._bindings = copyBindings(action._defaults)
 		action._generation += 1

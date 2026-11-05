@@ -1738,6 +1738,34 @@ Touch:
 - For full control, make your own `GuiButton` and call `Input.bindButton(action, button, scope?)`. The action stays pressed while any finger is on the button, including a finger that slid off before lifting.
 - For a custom joystick or any other control, `Input.source(action)` returns a handle with `set(value)`, `press()`, `release()` and `destroy()`.
 
+#### Input buffering
+
+In combo combat, a press that lands during an attack's recovery should fire when the recovery ends instead of being lost. Give the button a `buffer` in seconds, and ask for the press with `consumeBuffered()` when the action is ready:
+
+```luau
+local M1 = Gameplay:button("M1", { Enum.UserInputType.MouseButton1, Key.ButtonR1 }, { buffer = 0.15 })
+
+local recovering = false
+local function tryAttack()
+	if recovering or not M1:consumeBuffered() then
+		return -- busy: a press now stays usable for 0.15 s
+	end
+	recovering = true
+	swing()
+	Hydrogen.Clock.delay(0.4, function()
+		recovering = false
+		tryAttack() -- takes a press made in the last 0.15 s of recovery
+	end)
+end
+scope:add(M1:onBegan(tryAttack))
+```
+
+- Each press that begins the action is remembered with `Hydrogen.Clock.now()`, so the fake clock drives it in tests. A newer press replaces an older one.
+- `consumeBuffered()` returns `true` if that press is at most `buffer` seconds old and nobody has taken it, and clears it either way. It fires nothing and nothing runs per frame.
+- The press is remembered before `onBegan` listeners run. Call one function from both `onBegan` and the end of recovery, as above, so the press that started an attack is taken and doesn't fire a second one.
+- Only presses that reach the action count: presses sunk by a higher-priority context, presses while its context is disabled, holding the button and typing in a TextBox are not buffered. Disabling the action's context clears its buffered press, so a click from before a menu opened doesn't attack when it closes.
+- Only buttons take `buffer`. `consumeBuffered()` on an action defined without one errors and says to add it.
+
 #### Rules
 
 - **Client only.** `Hydrogen.Input` listens to `UserInputService` once the first action is defined on a client. On the server, definitions work, so a shared module can define them, but nothing fires. The first listener registered on the server warns.
