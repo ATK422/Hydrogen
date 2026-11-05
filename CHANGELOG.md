@@ -15,6 +15,7 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 ### Fixed
 
 - Docs: `component.md` no longer calls character hooks "planned"; `data.md`'s receipt recipe points to `Hydrogen.Receipts.fromData`; `input.md` calls a clientFunction with `:Fire`, not `:Invoke`; `clock.md`'s quick start no longer uses the `Clock.wait` loop `scheduler.md` warns against.
+- Docs: every Luau example in `README.md` and `docs/ai/*.md` is now checked by the test suite (and CI): it must compile, and every `Hydrogen.*` name it uses must exist. Three examples that didn't compile were fixed (the middleware shape, and two network modules that mixed a `local` with table fields).
 - Docs: a recipe for testing hit detection under Lune, where spatial queries don't exist: one query system, replaced in tests (`testing.md`, README).
 - `create_hydrogen` 0.1.1: on macOS and Linux, a missing git, Rokit or pesde is reported with its install instructions. 0.1.0 only recognized Windows' "program not found" and treated the tool as installed but failing.
 

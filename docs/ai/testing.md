@@ -368,7 +368,9 @@ return Hydrogen.define(function()
 
 	return Spatial
 end)
+```
 
+```luau
 -- ServerScriptService/Systems/Melee.luau: rules only, no physics
 local SpatialSystem = require(script.Parent.Spatial)
 
@@ -383,7 +385,9 @@ return Hydrogen.define(function(use)
 
 	return Melee
 end)
+```
 
+```luau
 -- Test: decide what the query "sees"; check what the rules do with it
 local victim = Instance.new("Model")
 local lastBox: CFrame? = nil

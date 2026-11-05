@@ -112,7 +112,10 @@ Damage = Hydrogen.serverEvent("Damage", gt.number(), gt.Vector3()),
 
 ```luau
 local Item = gt.table({ id = gt.string(), count = gt.number({ integer = true }) })
-Equip = Hydrogen.clientEvent("Equip", Item, gt.optional(gt.string())),
+
+return {
+	Equip = Hydrogen.clientEvent("Equip", Item, gt.optional(gt.string())),
+}
 ```
 
 **Namespaced definitions for a multi-place game.**

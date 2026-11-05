@@ -31,6 +31,7 @@ require("./Commands")()
 require("./Config")()
 require("./Debug")()
 require("./Lint")()
+require("./Docs")()
 
 local frktest = require("@pkg/frktest")
 local console_reporter = frktest.reporters.console_reporter

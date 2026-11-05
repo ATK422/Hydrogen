@@ -534,7 +534,7 @@ Register listeners in `init`. The network starts between the `init` and `start` 
 Middleware sees, and can replace, every payload going over the wire. It has this shape:
 
 ```luau
-function(context: Hydrogen.MiddlewareContext, ...): ...
+function(context: Hydrogen.MiddlewareContext, ...: any): ...any
 	-- return the values to pass on (return ... to leave them unchanged)
 	return ...
 end
@@ -641,7 +641,9 @@ local Unit = gt.table({
 	hp = gt.number({ integer = true, range = "[0, 255]" }),
 })
 
-BattleFrame = Hydrogen.serverEvent("BattleFrame", gt.array(Unit)):Unreliable():Encode(),
+return {
+	BattleFrame = Hydrogen.serverEvent("BattleFrame", gt.array(Unit)):Unreliable():Encode(),
+}
 ```
 
 `:Encode()` works on all four kinds (`clientEvent`, `serverEvent`, `clientFunction`, `serverFunction`; for functions it covers the arguments and the return values). The payload is packed into a `buffer` laid out by the schema:
@@ -2055,7 +2057,7 @@ return Config.define("Game", {
 app:addSystem(GameConfig)
 
 -- a server system (use(GameConfig) so flags are evaluated before its playerAdded)
-if GameConfig.flags.NewShop:enabled(player) then ... end
+if GameConfig.flags.NewShop:enabled(player) then openNewShop(player) end
 local length = GameConfig.values.RoundLength
 GameConfig:observe("RoundLength", function(seconds) timer:setLength(seconds) end)
 
@@ -2187,7 +2189,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 467 | Passed: 467` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 476 | Passed: 476` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 
@@ -2310,6 +2312,7 @@ test/
   Config.luau          Hydrogen.Config under Hydrogen.test: environments, rollouts, replication, live sources
   Debug.luau           Hydrogen.Debug stats, drops, latency, authorization and the server view
   Lint.luau            the network lint against the fixture games in Fixtures/Lint
+  Docs.luau            every luau example in README.md and docs/ai compiles, and every Hydrogen.X it names exists
   Fixtures/            modules the suites require
 bench/                 micro-benchmarks, not run by the suite (lune run bench/Signal)
 docs/ai/               agent-facing docs, one file per API area (format in AGENTS.md); llms.txt indexes them
