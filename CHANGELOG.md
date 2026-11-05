@@ -4,8 +4,18 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 
 ## Unreleased
 
+### Added
+
+- `Hydrogen.Clock.serverNow()`: the server's clock, shared by the server and every client (`workspace:GetServerTimeNow()` in a game), for timestamps one side sends and the other compares. The fake clock drives it from a new `serverNow` option (default: the `time` option), and `fake:setServerOffset(seconds, player?)` skews it for one loopback client, or all of them, to test latency and clock skew.
+
+### Changed
+
+- The docs now say to register network listeners (`:On`, `:Use`) in `init`, everywhere. The network starts between `init` and `start`, and a client handles the events queued for it right then, so a listener added in `start` could miss them silently. `systems.md`, `network.md`, `scope.md`, the README and the `create_hydrogen` example systems said `start`; `testing.md` and `guards.md` already said `init`.
+
 ### Fixed
 
+- Docs: `component.md` no longer calls character hooks "planned"; `data.md`'s receipt recipe points to `Hydrogen.Receipts.fromData`; `input.md` calls a clientFunction with `:Fire`, not `:Invoke`; `clock.md`'s quick start no longer uses the `Clock.wait` loop `scheduler.md` warns against.
+- Docs: a recipe for testing hit detection under Lune, where spatial queries don't exist: one query system, replaced in tests (`testing.md`, README).
 - `create_hydrogen` 0.1.1: on macOS and Linux, a missing git, Rokit or pesde is reported with its install instructions. 0.1.0 only recognized Windows' "program not found" and treated the tool as installed but failing.
 
 ## 0.5.0

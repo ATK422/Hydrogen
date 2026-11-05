@@ -206,7 +206,7 @@ Transactions
 
 ## Recipes
 
-Grant a developer product exactly once (until `Hydrogen.Receipts` lands; afterwards use its Data adapter):
+Grant a developer product exactly once. In a game, use `Hydrogen.Receipts` with `Hydrogen.Receipts.fromData(PlayerData)` (receipts.md), which does this for every product and adds retries, game passes and tests. This is what it does underneath, for a game that owns `ProcessReceipt` itself:
 
 ```luau
 local MarketplaceService = game:GetService("MarketplaceService")

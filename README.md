@@ -82,7 +82,7 @@ Hydrogen.DROP           -- return this from a middleware to stop a message
 Hydrogen.loopback       -- headless tests: one VM plays the server and fake clients
 Hydrogen.test           -- one call per test: loopback, fake clock, app, fakes, players, expectations
 Hydrogen.harness        -- the same harness for frameworks with setup/teardown hooks
-Hydrogen.Clock          -- time for systems and tests: Clock.now(), wait, delay, heartbeat, fake()
+Hydrogen.Clock          -- time for systems and tests: Clock.now(), serverNow(), wait, delay, heartbeat, fake()
 Hydrogen.gt             -- GreenTea, for writing schemas
 Hydrogen.Scope          -- cleanup tied to lifetimes: Scope.new(), Scope.of(system, player or character?)
 Hydrogen.Data           -- session-locked DataStore persistence: Data.player, Data.store, Data.memory
@@ -509,20 +509,25 @@ Usage inside a system:
 
 ```luau
 -- server
-function ChatServer:start()
+function ChatServer:init()
 	Chat.SendMessage:On(function(player, text)
 		Chat.MessagePosted:FireAll(player.Name, text)
 	end)
 end
 
 -- client
-function ChatClient:start()
+function ChatClient:init()
 	Chat.MessagePosted:On(function(author, text)
 		print(`{author}: {text}`)
 	end)
+end
+
+function ChatClient:start()
 	Chat.SendMessage:Fire("hello")
 end
 ```
+
+Register listeners in `init`. The network starts between the `init` and `start` hooks, and a client handles the events the server queued for it right then, so a listener added in `start` can miss them. Call functions from `start`.
 
 ### Middleware
 
@@ -1144,14 +1149,11 @@ Under [Hydrogen's Lune runtime](#running-tests-under-lune) every `warn()` is cap
 Hydrogen reads time through `Hydrogen.Clock`, and so can your systems. The harness installs a fake clock, so timers only move when the test says so:
 
 ```luau
--- In a system
+-- In a system: Scheduler runs on Hydrogen.Clock, and the timer stops with the system
 function Autosave:start()
-	task.spawn(function()
-		while true do
-			Hydrogen.Clock.wait(60)
-			Data:saveAll()
-		end
-	end)
+	Hydrogen.Scheduler.every(60, function()
+		Data:saveAll()
+	end):bind(self)
 end
 
 -- In a test: five saves, instantly
@@ -1164,6 +1166,7 @@ end)
 | --- | --- |
 | `Clock.now()` | `os.clock()`: seconds, for durations and cooldowns |
 | `Clock.time()` | `os.time()`: Unix seconds, for saved timestamps |
+| `Clock.serverNow()` | `workspace:GetServerTimeNow()`: the server's clock, shared by the server and every client |
 | `Clock.wait(seconds?)` | `task.wait`; no argument waits for the next frame |
 | `Clock.delay(seconds, fn, ...)` | `task.delay`; `fn` can be a thread |
 | `Clock.cancel(thread)` | `task.cancel` |
@@ -1175,7 +1178,12 @@ end)
 - `t:advance(seconds)` runs every timer due by then, in the order they are due (ties in the order they were scheduled). While a timer runs, `Clock.now()` reads that timer's due time. Then heartbeat fires once with `dt = seconds`, and threads waiting for the next frame resume. A loop that waits 60 seconds runs five times in `t:advance(300)`, and `t:advance(0)` steps one frame. To step frame by frame, loop over `t:advance(1 / 60)`.
 - A server function whose client never answers: call `Fire` in `task.spawn`, then `t:advance(10)`.
 - When the test ends, threads still waiting on the fake clock are never resumed. The exception is teardown itself: `playerRemoving` and `stop` hooks waiting on the fake clock are stepped until they finish (for up to 5 real seconds), so a save with a retry delay still completes.
+- `Clock.serverNow()` is for timestamps one side sends and the other compares, such as when a cast ends: `CastEnds:FireAll(Clock.serverNow() + 2)`, and each client draws the bar from `endsAt - Clock.serverNow()` with no more traffic. Never send `Clock.now()` across; it is per machine. Under the fake clock it starts at the `serverNow` option (default: the `time` option) and moves with `t:advance`. `t.clock:setServerOffset(seconds, player?)` skews it for one fake client, or every client, to test latency: the offset applies inside `t:as(player, fn)` and that client's listeners.
 - Outside the harness: `local clock = Hydrogen.Clock.fake({ now = 0 })`, then `clock:advance(seconds)`, `clock:next()` (jump to the next timer), `clock:pending()` and `clock:restore()`. Only one fake clock can be installed at a time.
+
+#### Hit detection without spatial queries
+
+`workspace:GetPartBoundsInBox`, raycasts and other spatial queries don't exist under Lune. Put them behind one small system (say `Spatial`, with `charactersInBox(cframe, size, ignore)`), keep the rules in systems that `use` it, and pass `replace = { [Spatial] = fake }` to `Hydrogen.test` so the fake decides what overlaps. Geometry math over `CFrame` and `Vector3` stays in pure functions, which run under Lune as they are. The test then covers the rules (the attacker isn't hit, a blocked hit does nothing); a Studio playtest covers the physics. `docs/ai/testing.md` has the full recipe.
 
 #### Running tests under Lune
 
@@ -2187,7 +2195,7 @@ Expected output ends with `Tests Ran: 467 | Passed: 467` and `status: OK`. A few
 src/
   init.luau            public API and exported types
   App.luau             App: collects systems, runs init -> Network.init -> start, player, character and stop hooks; adds used systems
-  Clock.luau           time sources (now, time, wait, delay, cancel, heartbeat) and the fake clock
+  Clock.luau           time sources (now, time, serverNow, wait, delay, cancel, heartbeat) and the fake clock
   Log/
     init.luau          Hydrogen.Log: loggers, levels, sinks, rate limiting; Log.warn / Log.capture for Hydrogen's own warnings
     Types.luau         Level, Line, Logger, Buffer types and level ranks

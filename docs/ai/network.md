@@ -27,8 +27,8 @@ return {
 ```
 
 ```luau
--- server system
-function ChatServer:start()
+-- server system: listeners in init
+function ChatServer:init()
 	Chat.SendMessage:On(function(player, text)
 		Chat.MessagePosted:FireAll(player.Name, text)
 	end)
@@ -39,11 +39,14 @@ end
 ```
 
 ```luau
--- client system
-function ChatClient:start()
+-- client system: listeners in init, so events the server queued during boot arrive
+function ChatClient:init()
 	Chat.MessagePosted:On(function(author, text)
 		print(`{author}: {text}`)
 	end)
+end
+
+function ChatClient:start()
 	Chat.SendMessage:Fire("hello")
 	local recent = Chat.GetHistory:Fire(10) -- yields
 end
@@ -90,6 +93,7 @@ Middleware: `:Use(mw)` on events, and `:UseRequest(mw)` / `:UseResponse(mw)` on 
 - **Validation.** Firing with values that don't match the schema errors at the call site. An incoming event that doesn't match is **dropped** with a warning, and listeners never see it. That's your protection against exploiters. Functions validate their arguments and returns on both ends; a bad request errors back to the caller.
 - **Events are queued; functions are not.** Events fired before the network starts (e.g. in `init`) are queued and sent once it does. Server events to a client that hasn't finished its handshake are held until it has. Calling a function before the network starts errors, so call functions from `start` or later.
 - **Leaving players.** Sends to a player who has left, or is leaving, are dropped silently. You don't need `player.Parent` checks.
+- **Register listeners in `init`.** The network starts after every system's `init` and before any `start`. A client handles the events queued for it (everything the server fired to it before it was ready) as soon as the network starts, and a server hears clients from then on, so a listener added in `start` can miss them, silently if another listener exists. Register `:On`, `:Use` and `:UseRequest` in `init`; fire events anywhere; call functions from `start`.
 - **Listeners.** Events can have many listeners. Functions have one handler, so calling `:On` again replaces it. Every `:On` returns a disconnect function.
 - **Server function timeout.** `serverFunction:Fire` errors after 10 s by default. A client can simply never answer, so call it in its own thread (`task.spawn`) if a slow client shouldn't block the system. `:SetTimeout(math.huge)` waits forever, which is dangerous.
 - **Incoming data on the server is untrusted.** The schema checks its shape; your handler still checks game rules (does the player own the item, are they in range, has the cooldown passed).
@@ -150,6 +154,7 @@ disconnect()
 - Don't install GreenTea separately. Use `Hydrogen.gt` so the schemas match the validator.
 - Don't trust values in a server handler beyond their shape. Check ownership, range and cooldowns yourself.
 - Don't fire a function from `init`. It errors; use `start`.
+- Don't register `:On` listeners in `start`. Events queued for a client during boot are handled before `start` runs. Do register them in `init`.
 - Don't call `serverFunction:Fire` inline on a hot path without `pcall`. It can time out, and then it errors.
 - Don't rely on a table's metatable or identity surviving the wire. Tables are copied.
 

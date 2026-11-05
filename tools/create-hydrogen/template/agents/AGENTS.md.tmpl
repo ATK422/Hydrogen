@@ -60,7 +60,7 @@ Before finishing a change, run the tests{{#if lint}} and the checks in the table
 - One system per ModuleScript: the module returns `Hydrogen.define(function(use) ... end)` at top level. The system's id is the module's name. Call `use(require(path.To.Other))` synchronously in the constructor to depend on another system; both must be in the same app.
 - Hooks are optional methods: `init`, `start`, `playerAdded`, `playerRemoving`, `stop`. Don't use other systems' runtime state in `init`. Player hooks run in dependency order (`playerRemoving` in reverse).
 - Network objects (`Hydrogen.clientEvent`, `serverEvent`, `clientFunction`, `serverFunction`) live in `src/shared/Network/` with a GreenTea schema (`Hydrogen.gt`). Both Main scripts register that folder with `app:addNetwork`, before `app:start()`. Names must be unique and the same on both sides. Never create network objects after `app:start()`.
-- Call functions (`clientFunction:Fire`, `serverFunction:Fire`) from `start` or later, never from `init`.
+- Register network listeners (`:On`, `:Use`) in `init`: a client handles events the server queued for it as the network starts, before any `start` runs. Call functions (`clientFunction:Fire`, `serverFunction:Fire`) from `start` or later, never from `init`.
 - On the client, `WaitForChild` anything outside the script's own folder before using it.
 - Tests require game code through the DataModel, like game code: `require(game:GetService("ServerScriptService").Server.Systems.Name)`. Use `Hydrogen.loopback()` for players and the network, `app:replace(System, fake)` for fakes, and stop every app and close every loopback in `test.on_test_leave`.
 - Commit `pesde.lock`. Don't commit `sourcemap.json` or build outputs.

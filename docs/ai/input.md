@@ -203,7 +203,7 @@ end
 Persist bindings through the server's Data store:
 ```luau
 -- client
-Input.loadBindings(Remotes.GetBindings:Invoke())
+Input.loadBindings(Remotes.GetBindings:Fire()) -- a clientFunction; Fire yields for the answer
 Input.onBindingsChanged(function()
 	Remotes.SaveBindings:Fire(Input.saveBindings())
 end)

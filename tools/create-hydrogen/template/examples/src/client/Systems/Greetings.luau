@@ -13,11 +13,16 @@ return Hydrogen.define(function()
 		last = nil :: string?,
 	}
 
-	function Greetings:start()
+	-- Listeners go in init: the network starts between init and start, and events the server
+	-- queued for this client are handled right then.
+	function Greetings:init()
 		Greeting.Greeted:On(function(message)
 			Greetings.last = message
 			print(message)
 		end)
+	end
+
+	function Greetings:start()
 		Greeting.SayHello:Fire("hi")
 	end
 

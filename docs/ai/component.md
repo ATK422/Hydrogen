@@ -12,7 +12,7 @@ Use it when:
 
 Don't use it when:
 - The thing is per player, not per instance: use a system's `playerAdded` and `Hydrogen.Scope.of(system, player)`.
-- The thing is the player's character: use character hooks (planned) or `player.CharacterAdded` inside a player scope.
+- The thing is the player's character: use the `characterAdded` / `characterRemoving` system hooks and `Hydrogen.Scope.of(self, character)` (character.md).
 - There is exactly one instance you control: hold a reference in a system instead.
 - You need an ECS with queries over many component types per entity: Component binds one tag to one object per instance.
 
