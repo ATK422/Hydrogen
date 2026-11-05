@@ -6,7 +6,7 @@ A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you:
 - **App**: collects your systems (and network definitions) and boots them.
 - **Network**: typed, schema-checked remote events and functions. Nothing fired during startup is lost, because events are queued until the network and each client are ready. Middleware inspects or transforms traffic, and a logger and a rate limiter are built in. Events can be unreliable, and batching and buffer encoding are there when traffic gets heavy.
 - **Testing**: `Hydrogen.test` runs your systems with fakes, fake players and a fake clock in one call, checks what was fired with expectations, and always cleans up. It runs in Studio and under Lune, with any test framework. Underneath, `app:replace` swaps a system for a fake and `Hydrogen.loopback` runs server and client systems together in one VM.
-- **The kit**: the modules most games end up writing themselves, each free until you use it. Saving with `Data`, per-player and replicated state with `PlayerState` and `State`, purchases with `Receipts`, cleanup with `Scope`, plus `Log`, `Signal`, `Scheduler`, tagged-instance `Component`s, client `Input`, server-side `Guards`, in-game `Commands`, `Config` and feature flags, and a `Debug` overlay.
+- **The kit**: the modules most games end up writing themselves, each free until you use it. Saving with `Data`, per-player and replicated state with `PlayerState` and `State`, purchases with `Receipts`, cleanup with `Scope`, plus `Log`, `Signal`, `Scheduler`, tagged-instance `Component`s, client `Input`, server-side `Guards`, in-game `Commands`, `Config` and feature flags, a `Debug` overlay, and cross-server `Teleport` (with Data hand-off) and `Messaging`.
 - **Tools**: `pesde x atk422/create_hydrogen` starts a new game, and `pesde x atk422/hydrogen_lint` checks its network before you playtest.
 
 Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current version: **0.5.0** (see [CHANGELOG.md](CHANGELOG.md)). License: MIT.
@@ -99,9 +99,11 @@ Hydrogen.Guards         -- server-side rules for incoming traffic: cooldowns, ro
 Hydrogen.Commands       -- kit: in-game commands run on the server; add it, and Commands.Client on clients
 Hydrogen.Config         -- typed config and feature flags: Config.define, value, shared, flag; add it to the app
 Hydrogen.Debug          -- kit: network stats (Debug.stats()) and a developer overlay; add it to the app on both sides
+Hydrogen.Teleport       -- kit, server-only: teleports that save and release Data first, retry, and take it back; typed tickets
+Hydrogen.Messaging      -- kit, server-only: typed MessagingService topics with schema checks, size and rate limits, retries
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Log: `Hydrogen.Logger`, `Hydrogen.LogLevel`, `Hydrogen.LogThreshold`, `Hydrogen.LogFields`, `Hydrogen.LogMessage`, `Hydrogen.LogLine`, `Hydrogen.LogSink`, `Hydrogen.LogBuffer` and `Hydrogen.LogRateLimitOptions`. Signal adds `Hydrogen.Signal<T...>` and `Hydrogen.Connection`; Scheduler adds `Hydrogen.Timer`, `Hydrogen.EveryOptions` and `Hydrogen.FixedOptions`. For Component: `Hydrogen.Component<I, T>` and `Hydrogen.ComponentOptions<I, A, T>`. For Input: `Hydrogen.InputAction<V>`, `Hydrogen.InputContext`, `Hydrogen.InputDevice`, `Hydrogen.InputKey`, `Hydrogen.InputBinding`, `Hydrogen.InputSavedBindings`, `Hydrogen.InputGlyph`, `Hydrogen.InputConflict` and `Hydrogen.InputSource<V>`. For Guards: `Hydrogen.Guard`, `Hydrogen.GuardOptions`, `Hydrogen.GuardRejectHook`, `Hydrogen.Cooldown`, `Hydrogen.CooldownOptions`, `Hydrogen.RoleResolver`, `Hydrogen.RoleSource`, `Hydrogen.GuardPredicate`, `Hydrogen.RangeOptions` and `Hydrogen.GuardsConfigureOptions`. For Commands: `Hydrogen.CommandSpec`, `Hydrogen.CommandContext`, `Hydrogen.CommandArg`, `Hydrogen.CommandArgOptions`, `Hydrogen.CommandParseContext`, `Hydrogen.CommandPermission`, `Hydrogen.CommandResult`, `Hydrogen.CommandStatus`, `Hydrogen.CommandOutputKind`, `Hydrogen.CommandOutputLine`, `Hydrogen.CommandInfo`, `Hydrogen.CommandArgInfo`, `Hydrogen.CommandCompletion`, `Hydrogen.CommandSuggestion`, `Hydrogen.CommandsOptions`, `Hydrogen.CommandsClientOptions` and `Hydrogen.PermissionResolver`. For Config: `Hydrogen.Config<V, F>`, `Hydrogen.ConfigSpec<V, F>`, `Hydrogen.Flag`, `Hydrogen.FlagRule`, `Hydrogen.ConfigSegment`, `Hydrogen.ConfigEnvironment`, `Hydrogen.ConfigSource` and `Hydrogen.MemoryConfigSource`. For Debug: `Hydrogen.DebugOptions`, `Hydrogen.NetStat`, `Hydrogen.NetLatency`, `Hydrogen.DebugView`, `Hydrogen.DebugPlayerView`, `Hydrogen.DebugRow`, `Hydrogen.BootReport`, `Hydrogen.DebugWarning` and `Hydrogen.DebugInspectable`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions` and `Hydrogen.StateSerializer`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Log: `Hydrogen.Logger`, `Hydrogen.LogLevel`, `Hydrogen.LogThreshold`, `Hydrogen.LogFields`, `Hydrogen.LogMessage`, `Hydrogen.LogLine`, `Hydrogen.LogSink`, `Hydrogen.LogBuffer` and `Hydrogen.LogRateLimitOptions`. Signal adds `Hydrogen.Signal<T...>` and `Hydrogen.Connection`; Scheduler adds `Hydrogen.Timer`, `Hydrogen.EveryOptions` and `Hydrogen.FixedOptions`. For Component: `Hydrogen.Component<I, T>` and `Hydrogen.ComponentOptions<I, A, T>`. For Input: `Hydrogen.InputAction<V>`, `Hydrogen.InputContext`, `Hydrogen.InputDevice`, `Hydrogen.InputKey`, `Hydrogen.InputBinding`, `Hydrogen.InputSavedBindings`, `Hydrogen.InputGlyph`, `Hydrogen.InputConflict` and `Hydrogen.InputSource<V>`. For Guards: `Hydrogen.Guard`, `Hydrogen.GuardOptions`, `Hydrogen.GuardRejectHook`, `Hydrogen.Cooldown`, `Hydrogen.CooldownOptions`, `Hydrogen.RoleResolver`, `Hydrogen.RoleSource`, `Hydrogen.GuardPredicate`, `Hydrogen.RangeOptions` and `Hydrogen.GuardsConfigureOptions`. For Commands: `Hydrogen.CommandSpec`, `Hydrogen.CommandContext`, `Hydrogen.CommandArg`, `Hydrogen.CommandArgOptions`, `Hydrogen.CommandParseContext`, `Hydrogen.CommandPermission`, `Hydrogen.CommandResult`, `Hydrogen.CommandStatus`, `Hydrogen.CommandOutputKind`, `Hydrogen.CommandOutputLine`, `Hydrogen.CommandInfo`, `Hydrogen.CommandArgInfo`, `Hydrogen.CommandCompletion`, `Hydrogen.CommandSuggestion`, `Hydrogen.CommandsOptions`, `Hydrogen.CommandsClientOptions` and `Hydrogen.PermissionResolver`. For Config: `Hydrogen.Config<V, F>`, `Hydrogen.ConfigSpec<V, F>`, `Hydrogen.Flag`, `Hydrogen.FlagRule`, `Hydrogen.ConfigSegment`, `Hydrogen.ConfigEnvironment`, `Hydrogen.ConfigSource` and `Hydrogen.MemoryConfigSource`. For Debug: `Hydrogen.DebugOptions`, `Hydrogen.NetStat`, `Hydrogen.NetLatency`, `Hydrogen.DebugView`, `Hydrogen.DebugPlayerView`, `Hydrogen.DebugRow`, `Hydrogen.BootReport`, `Hydrogen.DebugWarning` and `Hydrogen.DebugInspectable`. For Teleport: `Hydrogen.TeleportResult`, `Hydrogen.TeleportFailure`, `Hydrogen.TeleportFailReason`, `Hydrogen.TeleportSendOptions`, `Hydrogen.TeleportRequest`, `Hydrogen.TeleportAccepted`, `Hydrogen.TeleportBackend`, `Hydrogen.TeleportConfig`, `Hydrogen.TeleportTicket<T>` and `Hydrogen.FakeTeleportService`. For Messaging: `Hydrogen.MessagingTopic<T>`, `Hydrogen.MessagingTopicOptions`, `Hydrogen.MessageInfo`, `Hydrogen.MessagingBackend`, `Hydrogen.MessagingMessage`, `Hydrogen.MessagingConfig` and `Hydrogen.MessagingMemoryBus`.
 
 Two commands live outside the game: `pesde x atk422/create_hydrogen` starts a new game, and `pesde x atk422/hydrogen_lint` checks its network before you playtest ([Checking the network before you playtest](#checking-the-network-before-you-playtest)).
 
@@ -2155,6 +2157,121 @@ Rules:
 - **Text over the wire, not values.** Formatting on the server makes the view small and safe to send: cycles, Instances and mixed tables can't break the remote. It also makes the panel read-only.
 - **Explicit `inspect`.** Data stores and PlayerStates hold private data, so the panel shows only what you list.
 
+### Teleports
+
+`Hydrogen.Teleport` moves players to another place or server without losing or duplicating their `Hydrogen.Data`. A bare `TeleportAsync` leaves the player's session lock on this server until its `playerRemoving` saves, so the destination's load waits for it (up to 30 seconds, then kicks). `Teleport.send` saves and releases first:
+
+```luau
+-- ServerScriptService/Systems/Portals.luau
+local Hydrogen = require(ReplicatedStorage.roblox_packages.hydrogen)
+
+local FOREST_PLACE = 1234567890
+
+return Hydrogen.define(function(use)
+	use(Hydrogen.Teleport) -- adds it to the app, so shutdown stops its retries
+	local Portals = {}
+
+	function Portals.enter(player: Player)
+		local result = Hydrogen.Teleport.send(player, FOREST_PLACE) -- yields until they left or failed
+		if not result.ok then
+			-- Still here, with their data taken back and saving again.
+			print(result.failed[1].reason, result.failed[1].message)
+		end
+	end
+
+	return Portals
+end)
+```
+
+What `send` does, for one player or a party:
+
+1. Runs `Teleport.onHandOff` callbacks: the last moment a change still reaches the destination (session playtime, last position).
+2. Saves and releases every `Data.player` store the players are in: one write that stores the data and clears the lock. A player whose release fails isn't sent (`DataNotSaved`) and keeps playing on locked, saving data.
+3. Calls `TeleportAsync`, only after every release landed. A player can't reach the destination before this call, so the destination's load always finds the lock cleared and loads at once.
+4. Waits for each player to leave (teleported) or for `TeleportInitFailed`. `Failure`, `Flooded` (after 15 seconds) and `TeleportAsync` errors are retried with backoff, up to `attempts` (3). `GameFull`, `GameNotFound`, `GameEnded`, `Unauthorized`, `IsTeleporting` and `TimedOut` (still here `timeout`, 30, seconds after Roblox accepted) aren't.
+5. Takes the data back for everyone who stayed, under the same lock. Changes made on this server in the meantime are kept and saved if nothing else wrote the record; otherwise the stored data wins, with a warning. If the data can't be taken back, the store's `onLoadFailed` runs (warn and kick, by default): no one keeps playing on data that isn't saved.
+
+The result is `{ ok, teleported, failed = { { player, reason, message } }, attempts, reservedCode }`, and failures are warned once per send.
+
+While a player's data is handed off, `get` still works, but `isLoaded` is false, `update` changes memory only, `updateOnce` returns `"failed"` (so a purchase in that window is granted at the destination) and `transaction` errors. If the player then leaves, changes made after the hand-off are lost, and Data warns. Make them before `send`, or in `onHandOff`.
+
+Options: `reserveServer = true` puts a party in a new reserved server (retries join the same one, and `result.reservedCode` sends late joiners there), `reservedCode` joins one (`Teleport.reserve(placeId)` makes a code), `serverId` joins a specific server, `data` sets teleport data, and `attempts` and `timeout` override the defaults (`Teleport.configure` changes them for every send).
+
+**Tickets** carry typed teleport data:
+
+```luau
+-- ReplicatedStorage/Shared/Tickets.luau, required by both places
+local DungeonTicket = Hydrogen.Teleport.ticket("Dungeon", gt.table({ dungeon = gt.string(), difficulty = gt.number() }))
+
+-- Lobby:
+DungeonTicket:send(party, DUNGEON_PLACE, { dungeon = "Crypt", difficulty = 2 }, { reserveServer = true })
+
+-- Dungeon place, in a system's playerAdded:
+local ticket = DungeonTicket:read(player) -- checked against the schema; nil if absent or invalid
+```
+
+Teleport data passes through the client, so an exploiter can change it. Use tickets for routing and presentation (which dungeon, which gate, party names) and never for anything of value. Put coins, items and unlocks in Data before the teleport and read them from Data at the destination.
+
+Rules:
+
+- A second `send` for a player whose send is still running reports `Busy`. Players who leave mid-teleport are reported `Left`, with their data saved and released.
+- On `app:stop()` (bound to `BindToClose`) sends stop retrying, and players still here are reported `ShuttingDown`, their data saved and released.
+- Only `Data.player` stores are handed off. Key stores (`Data.store`) stay with the server.
+- In Studio the real `TeleportAsync` fails; Teleport reports it with a hint instead of retrying. Test with `Hydrogen.Teleport.fakeService()`:
+
+```luau
+local fake = Hydrogen.Teleport.fakeService()
+Hydrogen.Teleport.configure({ service = fake })
+-- In a Hydrogen.test with the Data store and Hydrogen.Teleport:
+fake:failNext(1)              -- the first attempt fails; t:advance(1) runs the retry
+fake:hold(true)               -- accepted teleports wait for fake:complete(player) or fake:fail(player)
+fake:arrive(bob)              -- bob's join data as the destination would see the last request
+```
+
+By default the fake makes an accepted player leave at once, so `send` returns without advancing time. Under Lune and `Hydrogen.loopback()`, an unconfigured Teleport uses a fake automatically.
+
+#### Why it's designed this way
+
+- **Release before teleporting, not after leaving.** Data's session lock is what stops two servers from writing one record. Releasing it in the source's `playerRemoving` races the destination's load. Releasing it first, and calling `TeleportAsync` only once that write landed, orders the two by construction.
+- **Read-only while handed off, rather than locked.** Between the release and the outcome, the player is still playing here. Erroring on every `update` would break gameplay code, so writes go to memory: kept if the teleport fails and nothing else changed the record, reported if it succeeds.
+- **Take back with the normal lock.** Reclaiming reads the stored record under the same rules as a load, so it never overwrites a server that legitimately loaded the data in between.
+- **A result, not an exception.** Teleports fail for ordinary reasons (full servers, throttling). The caller decides what to tell the player, and the data is already safe when `send` returns.
+
+### Cross-server messaging
+
+`Hydrogen.Messaging` wraps `MessagingService` in typed topics:
+
+```luau
+-- ServerScriptService/Shared/Topics.luau
+local Announcements = Hydrogen.Messaging.topic("Announcements", gt.table({ text = gt.string() }))
+
+-- In a system that use(Hydrogen.Messaging):
+function Announcer:start()
+	Hydrogen.Scope.of(self):add(Announcements:subscribe(function(value, info)
+		Remotes.Show:FireAll(value.text) -- info.fromThisServer, info.serverId, info.sent
+	end))
+end
+
+task.spawn(function()
+	Announcements:publish({ text = "Double XP for an hour!" }) -- yields; returns ok, err
+end)
+```
+
+- **`publish` checks before sending.** A value that fails the schema, that JSON can't hold (Vector3, Instances, arrays with holes) or that is over MessagingService's 1000 bytes as JSON (Hydrogen's envelope included) errors at the call. Then it waits if this server would pass its publish limit (600 + 240 per player per minute), sends, and retries failures (3 attempts). A publish that keeps failing returns `false, err` and warns.
+- **`subscribe` only sees valid values.** Messages that fail the schema, or weren't sent by Hydrogen, are dropped with a warning at most once per topic per 10 seconds. Values are frozen and shared by every subscriber. A server receives its own messages too (`info.fromThisServer`); pass `{ ignoreSelf = true }` to `Messaging.topic` to skip them.
+- **Lazy.** Defining a topic does nothing. The first subscriber makes one MessagingService subscription in the background (retried on failure), later subscribers share it, and the last unsubscribe drops it.
+- **Cleanup.** `subscribe` returns an unsubscribe function; `scope:add(...)` ties it to a system, player or round. With `Hydrogen.Messaging` in the app, `app:stop()` drops every subscription.
+- **Delivery isn't guaranteed and order isn't kept.** Never grant anything from a message alone: store it (DataStore, MemoryStore) and use the message as a hint to look.
+- **Server-only.** Topics can be defined in shared modules, but `publish` and `subscribe` error on a client.
+
+Tests use `Hydrogen.Messaging.memoryBus()`: `Messaging.configure({ service = bus })`, then `bus:send(topic, value, serverId?)` plays another server, `bus:sendRaw` sends malformed data, `bus.published` lists what was sent, and `failPublishes` / `failSubscribes` simulate outages.
+
+#### Why it's designed this way
+
+- **Schemas on both ends.** Servers running different versions of a place publish to the same topics during an update. Checking on receive turns a mismatch into a warning instead of an error deep in a handler.
+- **Limits enforced where they can be.** Size and this server's publish rate are known locally, so they're checked before the request. The receive and subscription limits depend on every server, so they're documented instead.
+- **One subscription per topic.** Subscriptions per server are limited, and subscribing yields. Sharing one per topic makes per-player and per-round subscribers cheap.
+
 ---
 
 ## Part 2: Working on Hydrogen itself
@@ -2214,6 +2331,7 @@ src/
     Backend.luau       backend type, in-memory backend, Roblox DataStore backend
     Tables.luau        copy, deep freeze, reconcile, structural sharing
     Clock.luau         Data's time sources, forwarding to Hydrogen.Clock
+    HandOff.luau       internal, for Teleport: release every player store before a teleport, take it back after a failure
   PlayerState/
     init.luau          re-exports Define and its types
     Define.luau        PlayerState.new: fields, proxies, lifecycle
@@ -2276,6 +2394,18 @@ src/
     Server.luau        authorization and the read-only view sent to the overlay
     Format.luau        values as one line of text for the view
     Overlay.luau       the client panel (verified in Studio; not drawn headless)
+  Teleport/
+    init.luau          exports the Teleport system and its types
+    Teleport.luau      the system: send (hand off, TeleportAsync, retries, take back), tickets, reserve, onHandOff
+    Types.luau         Result, Failure, SendOptions, Request, Backend, Ticket
+    FakeService.luau   stand-in TeleportService for tests
+    RobloxService.luau the real TeleportService behind the Backend shape (TeleportOptions, GetJoinData)
+  Messaging/
+    init.luau          exports the Messaging system and its types
+    Messaging.luau     the system: typed topics, publish budget and retries, shared lazy subscriptions
+    Types.luau         Topic, MessageInfo, Backend (MessagingService's shape), Config
+    MemoryBus.luau     in-memory MessagingService for tests
+    Json.luau          whether a value can be JSON, and its size (also used for teleport data)
   Testing/
     init.luau          Hydrogen.test and Hydrogen.harness
     Expect.luau        expectations on deliveries, argument matching, failure messages
@@ -2301,6 +2431,8 @@ test/
   Guards.luau          Hydrogen.Guards as middleware under Hydrogen.test
   Config.luau          Hydrogen.Config under Hydrogen.test: environments, rollouts, replication, live sources
   Debug.luau           Hydrogen.Debug stats, drops, latency, authorization and the server view
+  Teleport.luau        Hydrogen.Teleport under Hydrogen.test: hand-off, retries, take-back, leaving, shutdown, tickets
+  Messaging.luau       Hydrogen.Messaging with a memory bus: schemas both ways, limits, retries, cleanup
   Lint.luau            the network lint against the fixture games in Fixtures/Lint
   Fixtures/            modules the suites require
 bench/                 micro-benchmarks, not run by the suite (lune run bench/Signal)

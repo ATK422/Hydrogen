@@ -48,7 +48,9 @@ type Record = {
 	once: { string }?,
 }
 
-type Status = "loading" | "loaded" | "failed" | "lost" | "closed"
+-- "handedOff": saved and released for a teleport (handOff), but still readable here until the
+-- player leaves or reclaim takes the lock back.
+type Status = "loading" | "loaded" | "failed" | "lost" | "closed" | "handedOff"
 
 type Session = {
 	key: string,
@@ -77,6 +79,17 @@ type Session = {
 	draft: any?,
 	-- updateOnce calls still saving; unload waits for them.
 	onceRunning: number,
+	-- unload is running: a release it makes closes the session for good.
+	unloading: boolean,
+	-- handOff is running: a release it makes leaves the session "handedOff".
+	handingOff: boolean,
+	-- reclaim is taking the lock back; unload waits for it.
+	reclaiming: boolean,
+	-- The data the hand-off release wrote, to tell whether anyone changed it since.
+	released: any?,
+	-- The data of a release write that errored and may have landed. Until the next successful
+	-- write, an unlocked record holding exactly this data is still this session's.
+	unsure: any?,
 }
 
 type Group = {
@@ -395,6 +408,11 @@ function Store.load(self: Store, key: any, cancelled: (() -> boolean)?): (boolea
 		releasing = false,
 		draft = nil,
 		onceRunning = 0,
+		unloading = false,
+		handingOff = false,
+		reclaiming = false,
+		released = nil,
+		unsure = nil,
 	}
 	self._sessions[recordKey] = session
 
@@ -410,7 +428,8 @@ function Store.load(self: Store, key: any, cancelled: (() -> boolean)?): (boolea
 	return true, nil
 end
 
-function Store._acquire(self: Store, session: Session, cancelled: (() -> boolean)?): (boolean, string?)
+-- Also returns the loaded data. A reclaim keeps its in-memory data and decides itself.
+function Store._acquire(self: Store, session: Session, cancelled: (() -> boolean)?): (boolean, string?, any)
 	local backend = session.backend
 	local lockTimeout = self._config.lockTimeout or LOCK_TIMEOUT
 	local loadTimeout = self._config.loadTimeout or LOAD_TIMEOUT
@@ -472,12 +491,15 @@ function Store._acquire(self: Store, session: Session, cancelled: (() -> boolean
 			if takenOver then
 				Log.warn(`[HYDROGEN] Data store {self.name}: took over {self:_describe(session.owner)}, whose lock was abandoned {takenOver}s ago`)
 			end
-			session.data = Tables.freeze(data)
+			local loaded = Tables.freeze(data)
+			if not session.reclaiming then
+				session.data = loaded
+			end
 			session.lastWrite = Clock.now()
 			for _, id in session.once do
 				session.onceVersion[id] = 0
 			end
-			return true, nil
+			return true, nil, loaded
 		elseif outcome == "invalid" then
 			return false, `{self.name} data for {self:_describe(session.owner)} {detail}`
 		elseif outcome == "tx" then
@@ -763,10 +785,19 @@ function Store._writeOne(self: Store, session: Session): (boolean, string?)
 	local once = table.clone(session.once)
 	local lost = false
 
+	-- A release attempt that errored may still have landed. Then the record is unlocked and holds
+	-- exactly the data that attempt wrote, and it is still this session's: in the retry of that
+	-- release, and in later writes after a hand-off whose release failed that way (unsure).
+	local unsure = session.unsure
+	local errored = false
+
 	session.lastAttempt = Time.now()
 	local ok, err = self:_request(backend, "update", function()
-		return backend:update(self.name, session.key, function(record: Record?)
-			if not record or not record.lock or record.lock.id ~= session.lockId then
+		local sent, result = pcall(backend.update, backend, self.name, session.key, function(record: Record?)
+			local mine = if release and errored then data else unsure
+			local ours = record ~= nil
+				and (if record.lock then record.lock.id == session.lockId else mine ~= nil and Tables.equal(record.data, mine))
+			if not record or not ours then
 				lost = true
 				return nil
 			end
@@ -781,19 +812,33 @@ function Store._writeOne(self: Store, session: Session): (boolean, string?)
 			record.lock = if release then nil else { id = session.lockId, time = Clock.now() }
 			return record
 		end)
+		if not sent then
+			errored = true
+			error(result, 0)
+		end
+		return result
 	end)
 
 	if lost then
 		self:_lost(session)
 		return false, "the session lock was lost"
 	elseif not ok then
+		if release and errored then
+			session.unsure = data
+		end
 		return false, tostring(err)
 	end
 	session.savedVersion = math.max(session.savedVersion, version)
 	session.lastWrite = Clock.now()
+	session.unsure = nil
 	if release then
-		-- The lock is gone, so nothing may write this record again.
-		session.status = "closed"
+		-- The lock is gone, so nothing may write this record again (until reclaim takes it back).
+		if session.handingOff and not session.unloading then
+			session.status = "handedOff"
+			session.released = data
+		else
+			session.status = "closed"
+		end
 	end
 	return true, nil
 end
@@ -821,10 +866,13 @@ function Store._commitGroup(self: Store, group: Group): (boolean, string?)
 	for index, session in group.sessions do
 		local snapshot = snapshots[index]
 		local lost = false
+		local unsure = session.unsure
 		session.lastAttempt = Time.now()
 		local ok, err = self:_request(backend, "update", function()
 			return backend:update(self.name, session.key, function(record: Record?)
-				if not record or not record.lock or record.lock.id ~= session.lockId then
+				local ours = record ~= nil
+					and (if record.lock then record.lock.id == session.lockId else unsure ~= nil and Tables.equal(record.data, unsure))
+				if not record or not ours then
 					lost = true
 					return nil
 				end
@@ -859,6 +907,7 @@ function Store._commitGroup(self: Store, group: Group): (boolean, string?)
 	for index, session in group.sessions do
 		session.savedVersion = math.max(session.savedVersion, snapshots[index].version)
 		session.lastWrite = Clock.now()
+		session.unsure = nil
 		if session.group == group then
 			session.group = nil
 		end
@@ -955,11 +1004,18 @@ function Store.unload(self: Store, key: any)
 	if not session then
 		return
 	end
-	while session.status == "loading" do
+	session.unloading = true
+	while session.status == "loading" or session.reclaiming do
 		Time.wait()
 	end
 	if session.status == "closed" or self._sessions[recordKey] ~= session then
 		return
+	end
+
+	if session.status == "handedOff" and session.version > session.savedVersion then
+		Log.warn(
+			`[HYDROGEN] Data store {self.name}: changes to {self:_describe(key)} made after their data was handed off for a teleport weren't saved; make them before Teleport.send, or in Teleport.onHandOff`
+		)
 	end
 
 	if session.status == "loaded" then
@@ -986,6 +1042,104 @@ function Store.unload(self: Store, key: any)
 	if self._sessions[recordKey] == session then
 		self._sessions[recordKey] = nil
 	end
+end
+
+-- Teleport hand-off ---------------------------------------------------------------------------
+
+-- Saves the key and releases its lock, so the server a player teleports to can load it at
+-- once, but keeps the data readable here until the player leaves or reclaim takes it back:
+-- get still works, isLoaded is false, updateOnce fails, and other changes stay in memory,
+-- unsaved. Returns true once released, or when this server didn't hold the key. On failure the
+-- session stays loaded and locked (the write may have landed; see Session.unsure).
+function Store.handOff(self: Store, key: any): (boolean, string?)
+	local recordKey = self._config.keyOf(key)
+	local session = self._sessions[recordKey]
+	if not session then
+		return true, nil
+	end
+	while session.status == "loading" do
+		Time.wait()
+	end
+	if self._sessions[recordKey] ~= session or session.status ~= "loaded" or session.releasing then
+		-- Not held here (failed, lost, already handed off), or unload is already releasing it.
+		return true, nil
+	end
+
+	-- As in unload: a pending transaction is stored first, and purchases being granted finish.
+	if session.group and not session.group.persisted then
+		local ok, err = self:_save(session)
+		if not ok and session.status == "loaded" then
+			return false, `a transaction including {self:_describe(key)} couldn't be saved: {err}`
+		end
+	end
+	while session.onceRunning > 0 do
+		Time.wait()
+	end
+	if session.status ~= "loaded" or session.releasing then
+		return true, nil
+	end
+
+	session.releasing = true
+	session.handingOff = true
+	local ok, err = self:_save(session)
+	session.handingOff = false
+	if session.status == "handedOff" or session.status == "closed" then
+		return true, nil
+	end
+	-- Still loaded and locked; if the write errored after landing, session.unsure covers it.
+	session.releasing = session.unloading
+	return false, if ok then `the session is {session.status}` else err
+end
+
+-- Takes back a key handOff released, after the teleport failed. Changes made here since the
+-- hand-off are kept (and saved) when the stored data is still what the hand-off wrote;
+-- otherwise the stored data wins and they are dropped with a warning. Waits for another
+-- server's lock like load, until cancelled() says to stop. On failure the session stays
+-- handed off: readable, never saved.
+function Store.reclaim(self: Store, key: any, cancelled: (() -> boolean)?): (boolean, string?)
+	local session = self:_session(key)
+	if not session then
+		return false, `{self:_describe(key)} has no data on this server`
+	elseif session.status == "loaded" then
+		return true, nil
+	elseif session.status ~= "handedOff" or session.reclaiming then
+		return false, `the session is {if session.reclaiming then "already being reclaimed" else session.status}`
+	elseif self._closing then
+		return false, "the server is shutting down"
+	end
+
+	-- The lock id stays the same: if the release never landed, the lock is still this session's.
+	session.reclaiming = true
+	local ok, err, stored = self:_acquire(session, cancelled)
+	session.reclaiming = false
+	if not ok then
+		return false, err
+	end
+
+	local changedHere = session.version > session.savedVersion
+	local released = session.released
+	session.released = nil
+	session.status = "loaded"
+	session.releasing = false
+
+	if not Tables.equal(stored, released) then
+		if changedHere then
+			Log.warn(
+				`[HYDROGEN] Data store {self.name}: {self:_describe(key)}'s saved data changed while their teleport was in progress; changes made here since the hand-off were dropped`
+			)
+		end
+		self:_commit(session, stored)
+		session.savedVersion = session.version
+	elseif changedHere then
+		task.spawn(function()
+			local saved, saveErr = self:_save(session)
+			if not saved and session.status == "loaded" then
+				Log.warn(`[HYDROGEN] Data store {self.name}: autosave of {self:_describe(key)} failed: {saveErr}`)
+			end
+		end)
+	end
+	self:_startAutosave()
+	return true, nil
 end
 
 -- Autosave and shutdown -----------------------------------------------------------------------
@@ -1123,6 +1277,11 @@ function Store.placeholder(self: Store, key: any)
 		releasing = false,
 		draft = nil,
 		onceRunning = 0,
+		unloading = false,
+		handingOff = false,
+		reclaiming = false,
+		released = nil,
+		unsure = nil,
 	}
 end
 

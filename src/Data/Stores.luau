@@ -8,6 +8,7 @@ local RunService = game:GetService("RunService")
 local Backend = require("./Backend")
 local Clock = require("./Clock")
 local Store = require("./Store")
+local HandOff = require("./HandOff")
 local Definition = require("../Definition")
 local Network = require("../Network")
 local Log = require("../Log")
@@ -194,6 +195,8 @@ function Data.player<T>(name: string, options: PlayerOptions<T>): Definition.Def
 
 	local store = Store.new(storeConfig) :: any
 	local onLoadFailed = options.onLoadFailed or kick
+	-- Hydrogen.Teleport saves and releases every player store before a teleport.
+	HandOff.register(store, onLoadFailed)
 
 	return Definition.define(name, function()
 		store.init = function(self)

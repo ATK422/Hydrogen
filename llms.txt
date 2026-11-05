@@ -1,6 +1,6 @@
 # Hydrogen
 
-> Hydrogen (`atk422/hydrogen` on pesde) is a Luau framework for Roblox games: dependency-ordered systems with lifecycle and player hooks, an App that boots them, a typed schema-checked network, and a batteries-included kit (data, player state, replicated state, scopes, receipts, logging, signals and timers, tagged components, input, guards, commands, config and feature flags, a debug overlay, testing and a network lint). Its goals are developer experience, reliability and performance, and it aims to feel like a standard library: everything you need is already there.
+> Hydrogen (`atk422/hydrogen` on pesde) is a Luau framework for Roblox games: dependency-ordered systems with lifecycle and player hooks, an App that boots them, a typed schema-checked network, and a batteries-included kit (data, player state, replicated state, scopes, receipts, logging, signals and timers, tagged components, input, guards, commands, config and feature flags, a debug overlay, cross-server teleports and messaging, testing and a network lint). Its goals are developer experience, reliability and performance, and it aims to feel like a standard library: everything you need is already there.
 
 Read `docs/ai/systems.md` and `docs/ai/app.md` first. Every file follows the same layout: Use it when, Quick start, API, Rules, Recipes, Mistakes, Testing, Errors and warnings, Works with. Require Hydrogen as `require(ReplicatedStorage.roblox_packages.hydrogen)` and write schemas with `Hydrogen.gt` (GreenTea).
 
@@ -29,6 +29,8 @@ Read `docs/ai/systems.md` and `docs/ai/app.md` first. Every file follows the sam
 - [Commands](docs/ai/commands.md): `Hydrogen.Commands`, in-game commands with typed args, permissions and a console
 - [Config](docs/ai/config.md): `Hydrogen.Config`, typed config values and feature flags with segments, environments and live sources
 - [Debug](docs/ai/debug.md): `Hydrogen.Debug`, network stats and a developer overlay
+- [Teleport](docs/ai/teleport.md): `Hydrogen.Teleport`, teleports that save and release Data first, retry failures and take the data back; typed tickets for teleport data
+- [Messaging](docs/ai/messaging.md): `Hydrogen.Messaging`, typed MessagingService topics with schema checks, size and rate limits, retries and lazy subscriptions
 
 ## Testing
 

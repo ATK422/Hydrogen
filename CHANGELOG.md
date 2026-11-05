@@ -4,8 +4,17 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 
 ## Unreleased
 
+### Added
+
+- `Hydrogen.Teleport`, server-only teleports that hand off `Hydrogen.Data` cleanly. `Teleport.send(players, placeId, options?)` runs `Teleport.onHandOff` callbacks, saves and releases every `Data.player` store the players are in, and only then calls `TeleportAsync`, so the destination's load never waits for this server's lock. `Failure`, `Flooded` (15 s) and `TeleportAsync` errors are retried with backoff up to `attempts` (3); players who stay (failed, `TimedOut` after `timeout`, shutdown) get their data back under the same lock, keeping changes made meanwhile when the stored record is unchanged, or the store's `onLoadFailed` runs if it can't be taken back. Parties retry only failed members, into the same reserved server. A second send for a player answers `Busy`; players who leave mid-teleport are handled; `app:stop()` ends retries. Options: `serverId`, `reservedCode`, `reserveServer`, `data`, `attempts`, `timeout`. The result lists `teleported`, `failed` (with a reason and message), `attempts` and `reservedCode`.
+- `Teleport.ticket(name, schema)`: typed teleport data. `ticket:send(players, placeId, value, options?)` validates and sends it; `ticket:read(player)` reads it on arrival through the schema (untrusted: it passes through the client). Also `Teleport.joinData`, `Teleport.reserve`, `Teleport.configure` and `Teleport.fakeService()`, a stand-in TeleportService for tests (`failNext`, `errorNext`, `hold`/`complete`/`fail`, `arrive`, `requests`).
+- `Hydrogen.Messaging`, typed MessagingService topics. `Messaging.topic(name, schema, { ignoreSelf? })` gives `publish(value)`, which errors at once on a schema failure, a value JSON can't hold or a message over 1000 bytes, waits for the per-server publish budget (600 + 240 per player per minute) and retries failures, and `subscribe(fn)`, which delivers frozen values with `{ sent, serverId, fromThisServer }` and drops messages that fail the schema with a rate-limited warning. Nothing touches MessagingService until a topic is used; subscribers to a topic share one subscription, made in the background and retried. `app:stop()` drops every subscription; `scope:add(topic:subscribe(fn))` ties one to a scope. `Messaging.configure`, `Messaging.serverId()` and `Messaging.memoryBus()`, an in-memory MessagingService for tests.
+- Types `TeleportResult`, `TeleportFailure`, `TeleportFailReason`, `TeleportSendOptions`, `TeleportRequest`, `TeleportAccepted`, `TeleportBackend`, `TeleportConfig`, `TeleportTicket<T>`, `FakeTeleportService`, `MessagingTopic<T>`, `MessagingTopicOptions`, `MessageInfo`, `MessagingBackend`, `MessagingMessage`, `MessagingConfig` and `MessagingMemoryBus`.
+- `Hydrogen.Data`: player stores can be handed off for a teleport (internal, used by `Hydrogen.Teleport`): saved and released while still readable here, then either dropped when the player leaves or taken back. During a hand-off `isLoaded` is false, `update` changes memory only, `updateOnce` returns `"failed"` and `transaction` errors.
+
 ### Fixed
 
+- `Hydrogen.Data`: a release (save on leave) whose first write landed but reported an error was retried, found its own lock gone and warned that another server took it; the retry now completes the release.
 - `create_hydrogen` 0.1.1: on macOS and Linux, a missing git, Rokit or pesde is reported with its install instructions. 0.1.0 only recognized Windows' "program not found" and treated the tool as installed but failing.
 
 ## 0.5.0

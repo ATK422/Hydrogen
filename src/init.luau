@@ -18,6 +18,8 @@ local Guards = require("@self/Guards")
 local Commands = require("@self/Commands")
 local Config = require("@self/Config")
 local Debug = require("@self/Debug")
+local Teleport = require("@self/Teleport")
+local Messaging = require("@self/Messaging")
 local gt = require("./roblox_packages/gt")
 
 export type App = typeof(App.new())
@@ -144,6 +146,23 @@ export type DebugRow = Debug.Row
 export type BootReport = Debug.BootReport
 export type DebugWarning = Debug.Warning
 export type DebugInspectable = Debug.Inspectable
+export type TeleportResult = Teleport.Result
+export type TeleportFailure = Teleport.Failure
+export type TeleportFailReason = Teleport.FailReason
+export type TeleportSendOptions = Teleport.SendOptions
+export type TeleportRequest = Teleport.Request
+export type TeleportAccepted = Teleport.Accepted
+export type TeleportBackend = Teleport.Backend
+export type TeleportConfig = Teleport.Config
+export type TeleportTicket<T> = Teleport.Ticket<T>
+export type FakeTeleportService = Teleport.FakeTeleportService
+export type MessagingTopic<T> = Messaging.Topic<T>
+export type MessagingTopicOptions = Messaging.TopicOptions
+export type MessageInfo = Messaging.MessageInfo
+export type MessagingBackend = Messaging.Backend
+export type MessagingMessage = Messaging.Message
+export type MessagingConfig = Messaging.Config
+export type MessagingMemoryBus = Messaging.MemoryBus
 
 return {
 	App = App,
@@ -210,4 +229,8 @@ return {
 	Config = Config,
 	-- Kit: network stats (Debug.stats()) and a developer overlay. Add it to the app on both sides for the overlay.
 	Debug = Debug,
+	-- Kit, server-only: teleports that save and release Data first, retry, and take it back on failure. Typed tickets.
+	Teleport = Teleport,
+	-- Kit, server-only: typed MessagingService topics with schema checks, size limits and retries.
+	Messaging = Messaging,
 }
