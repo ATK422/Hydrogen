@@ -32,6 +32,8 @@ export type Cell = {
 	observers: { (...any) -> () }?,
 	keyObservers: { [any]: { (...any) -> () } }?,
 	listeners: { (...any) -> () }?,
+	-- Kind-specific state kept on this side only (meters: a prediction and limit timers).
+	aux: any?,
 }
 
 -- Something computed state can depend on: a state, or another computed state.
@@ -49,6 +51,10 @@ export type Kind = {
 	clearPending: (cell: Cell) -> (),
 	-- Client: applies a payload to a replica and tells observers.
 	apply: (state: Def, ctx: any, cell: Cell, ...any) -> (),
+	-- Server, optional: a player is about to receive state (before their snapshot).
+	join: ((state: Def, player: Player) -> ())?,
+	-- Optional: a cell is being dropped, to stop anything it scheduled.
+	discard: ((cell: Cell) -> ())?,
 }
 
 export type Def = Source & {
@@ -394,6 +400,13 @@ local function subscribe(player: Player)
 		return
 	end
 
+	for _, state in Store.states do
+		local join = state.kind.join
+		if join then
+			join(state, player)
+		end
+	end
+
 	-- Pending changes are already in the snapshot, so they must not reach this player again.
 	Store.flush()
 	subscribed[player] = true
@@ -449,6 +462,24 @@ local function unsubscribe(player: Player)
 	end
 end
 
+-- Lets the kind stop anything a cell scheduled before the cell is dropped.
+local function discard(state: Def, cell: Cell)
+	local hook = state.kind.discard
+	if hook then
+		hook(cell)
+	end
+end
+
+local function discardAll(state: Def, ctx: any)
+	local cell = state.global[ctx]
+	if cell then
+		discard(state, cell)
+	end
+	for _, playerCell in state.players[ctx] or {} do
+		discard(state, playerCell)
+	end
+end
+
 -- Forgets players and replicas, for a fresh network (a new loopback). Server values stay.
 local function dropReplication()
 	table.clear(subscribed)
@@ -463,11 +494,13 @@ local function dropReplication()
 	for _, state in Store.states do
 		for ctx in state.global do
 			if ctx ~= SERVER then
+				discardAll(state, ctx)
 				state.global[ctx] = nil
 			end
 		end
 		for ctx in state.players do
 			if ctx ~= SERVER then
+				discardAll(state, ctx)
 				state.players[ctx] = nil
 			end
 		end
@@ -600,7 +633,8 @@ local function replicaKey(): any
 	return LOCAL
 end
 
-local function localUserId(ctx: any): number?
+-- The UserId of the player a client context belongs to.
+function Store.localUserId(ctx: any): number?
 	if ctx == LOCAL then
 		local player = Players.LocalPlayer
 		return player and player.UserId
@@ -621,7 +655,7 @@ function Store.receive(state: Def, ...: any)
 		local userId = ...
 		Store.within(ctx, state.kind.apply, state, ctx, Store.cellAt(state, ctx, userId, true), select(2, ...))
 	else
-		local userId = localUserId(ctx)
+		local userId = Store.localUserId(ctx)
 		if userId then
 			Store.within(ctx, state.kind.apply, state, ctx, Store.cellAt(state, ctx, userId, true), ...)
 		end
@@ -636,7 +670,9 @@ function Store.receiveLeft(userId: number)
 	end
 	for _, state in Store.states do
 		local cells = state.players[ctx]
-		if cells then
+		local cell = cells and cells[userId]
+		if cell then
+			discard(state, cell)
 			cells[userId] = nil
 		end
 	end
@@ -657,6 +693,12 @@ function Store.reset()
 	-- the next write must schedule its own.
 	scheduled = false
 	for _, state in Store.states do
+		for ctx in state.global do
+			discardAll(state, ctx)
+		end
+		for ctx in state.players do
+			discardAll(state, ctx)
+		end
 		table.clear(state.global)
 		table.clear(state.players)
 		table.clear(state.everyone)
