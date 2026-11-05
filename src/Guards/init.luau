@@ -5,9 +5,11 @@
 -- Hydrogen.useMiddleware. A rejected event is dropped; a rejected function request errors back
 -- to the client with the reason. Cooldowns and roles can also be used directly from game code.
 
+local Clock = require("./Clock")
 local Cooldown = require("@self/Cooldown")
 local Guard = require("@self/Guard")
 local Log = require("./Log")
+local Ping = require("@self/Ping")
 local Range = require("@self/Range")
 local Roles = require("@self/Roles")
 
@@ -29,12 +31,30 @@ export type RangeOptions = GuardOptions & {
 	slack: number?,
 }
 
+export type TimestampOptions = GuardOptions & {
+	-- Which argument holds the client's Clock.serverNow() stamp. Defaults to 1.
+	arg: number?,
+	-- Picks the stamp from the arguments instead of arg, e.g. a field of a table.
+	timestamp: ((player: Player, ...any) -> any)?,
+	-- Seconds a stamp may be older than the player's ping. Defaults to 0.2.
+	tolerance: number?,
+	-- Pings above this count as this, so a lagging (or lag-switching) client can't widen the
+	-- window further. Defaults to Guards.configure's maxPing (1 second).
+	maxPing: number?,
+	-- Seconds a stamp may be ahead of the server's clock, for the client's estimate of it. Defaults to 0.05.
+	future: number?,
+}
+
 export type ConfigureOptions = {
 	-- Where a player's character is, for range checks. Defaults to the HumanoidRootPart, or the
 	-- character's PrimaryPart. Return nil when there's no character.
 	position: ((player: Player) -> Vector3?)?,
 	-- Default slack for range checks, in studs.
 	slack: number?,
+	-- A player's latency in seconds, for timestamp checks. Defaults to Player:GetNetworkPing().
+	ping: ((player: Player) -> number?)?,
+	-- Default cap on the ping timestamp checks allow for, in seconds.
+	maxPing: number?,
 }
 
 local Guards = {}
@@ -164,6 +184,79 @@ function Guards.distance(player: Player, target: any): (number?, string?)
 	return Range.distance(player, target)
 end
 
+-- Timestamp checks.
+
+local function seconds(value: number): string
+	return string.format("%.2f", value)
+end
+
+local function nonNegative(value: any): boolean
+	return type(value) == "number" and value >= 0 and value < math.huge
+end
+
+-- Drops messages whose Clock.serverNow() stamp is from the future, or older than the sender's
+-- ping (at most maxPing) plus tolerance, so a client can't backdate an action.
+function Guards.timestamp(options: TimestampOptions?): Guard
+	checkOptions(options, "Guards.timestamp")
+	local arg = (options and options.arg) or 1
+	local pick = options and options.timestamp
+	local tolerance = if options and options.tolerance ~= nil then options.tolerance else 0.2
+	local maxPing = options and options.maxPing
+	local future = if options and options.future ~= nil then options.future else 0.05
+	if type(arg) ~= "number" or arg < 1 or arg % 1 ~= 0 then
+		error(`[HYDROGEN] Guards.timestamp arg must be an argument position (1, 2, ...), got {tostring(arg)}`, 2)
+	end
+	if pick ~= nil and type(pick) ~= "function" then
+		error(`[HYDROGEN] Guards.timestamp timestamp must be a function (player, ...args) -> number, got {typeof(pick)}`, 2)
+	end
+	if not nonNegative(tolerance) then
+		error(`[HYDROGEN] Guards.timestamp tolerance must be a non-negative number of seconds, got {tostring(tolerance)}`, 2)
+	end
+	if maxPing ~= nil and not nonNegative(maxPing) then
+		error(`[HYDROGEN] Guards.timestamp maxPing must be a non-negative number of seconds, got {tostring(maxPing)}`, 2)
+	end
+	if not nonNegative(future) then
+		error(`[HYDROGEN] Guards.timestamp future must be a non-negative number of seconds, got {tostring(future)}`, 2)
+	end
+
+	return Guard.build({
+		check = function(player: Player, context: Guard.Context, ...: any): (string?, Guard.Spec?)
+			local stamp
+			if pick then
+				local ok, result = xpcall(pick, debug.traceback, player, ...)
+				if not ok then
+					Log.warn(`[HYDROGEN] Guards.timestamp timestamp function failed on {context.name}: {result}`)
+					return "invalid timestamp", nil
+				end
+				stamp = result
+			else
+				stamp = select(arg, ...)
+			end
+			-- NaN fails both comparisons; so do infinities, through the bounds.
+			if type(stamp) ~= "number" or not (stamp > -math.huge and stamp < math.huge) then
+				return "invalid timestamp", nil
+			end
+
+			local age = Clock.serverNow() - stamp
+			if age < -future then
+				return `timestamp from the future ({seconds(-age)}s ahead)`, nil
+			end
+			local limit = math.min(Ping.of(player), maxPing or Ping.maxPing) + tolerance
+			if age > limit then
+				return `timestamp too old ({seconds(age)}s, at most {seconds(limit)}s)`, nil
+			end
+			return nil, nil
+		end,
+		options = options,
+	})
+end
+
+-- The player's network latency in seconds (Player:GetNetworkPing(), or Guards.configure's ping),
+-- 0 when unknown.
+function Guards.ping(player: Player): number
+	return Ping.of(player)
+end
+
 -- Custom predicates.
 
 -- A guard from a function: return true to let the message through, or false and a reason.
@@ -261,7 +354,8 @@ Guards.onReject = Guard.onReject
 -- Whether a value is a guard made by Hydrogen.Guards.
 Guards.isGuard = Guard.isGuard
 
--- Changes how range checks find characters and how much slack they allow by default.
+-- Changes how range checks find characters and how much slack they allow by default, and where
+-- timestamp checks read a player's ping.
 function Guards.configure(options: ConfigureOptions)
 	if type(options) ~= "table" then
 		error(`[HYDROGEN] Guards.configure expects a table, got {typeof(options)}`, 2)
@@ -272,6 +366,12 @@ function Guards.configure(options: ConfigureOptions)
 	if options.slack ~= nil and (type(options.slack) ~= "number" or not (options.slack >= 0)) then
 		error(`[HYDROGEN] Guards.configure slack must be a non-negative number of studs, got {tostring(options.slack)}`, 2)
 	end
+	if options.ping ~= nil and type(options.ping) ~= "function" then
+		error(`[HYDROGEN] Guards.configure ping must be a function (player) -> number?, got {typeof(options.ping)}`, 2)
+	end
+	if options.maxPing ~= nil and not nonNegative(options.maxPing) then
+		error(`[HYDROGEN] Guards.configure maxPing must be a non-negative number of seconds, got {tostring(options.maxPing)}`, 2)
+	end
 	-- A key that's present replaces the setting; position = nil can't be told apart, so reset() restores defaults.
 	if options.position then
 		Range.position = options.position
@@ -279,12 +379,20 @@ function Guards.configure(options: ConfigureOptions)
 	if options.slack then
 		Range.slack = options.slack
 	end
+	if options.ping then
+		Ping.source = options.ping
+	end
+	if options.maxPing then
+		Ping.maxPing = options.maxPing
+	end
 end
 
 -- Puts configure's settings back to the defaults (for tests).
 function Guards.resetConfiguration()
 	Range.position = nil
 	Range.slack = 4
+	Ping.source = nil
+	Ping.maxPing = 1
 end
 
 return Guards

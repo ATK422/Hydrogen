@@ -591,6 +591,147 @@ return function()
 		end)
 	end)
 
+	test.suite("Guards timestamps", function()
+		test.case("stamps within ping plus tolerance pass; old and future ones are dropped", function()
+			remotes()
+			Hydrogen.test({ players = { "Alice", "Bob", "Cara" } }, function(t, alice, bob, cara)
+				local clock = t.clock :: Hydrogen.FakeClock
+				local rejections, onReject = recorder()
+				Cast:On(noop)
+				Cast:Use(Guards.timestamp({ onReject = onReject }))
+
+				clock:setServerOffset(-0.15, alice) -- behind by less than the 0.2 s tolerance
+				clock:setServerOffset(-0.5, bob) -- backdating
+				clock:setServerOffset(0.3, cara) -- ahead of the server
+				for _, player in { alice, bob, cara } do
+					t:as(player, function()
+						Cast:Fire(Clock.serverNow())
+					end)
+				end
+
+				t:expect(Cast):firedBy(alice, t.any):firedTimes(1)
+				check.equal(rejections[1], `guards-Cast{made}: timestamp too old (0.50s, at most 0.20s)`)
+				check.equal(rejections[2], `guards-Cast{made}: timestamp from the future (0.30s ahead)`)
+			end)
+		end)
+
+		test.case("the window grows with the player's ping, up to maxPing", function()
+			remotes()
+			local pings: { [Player]: number } = {}
+			Guards.configure({
+				ping = function(player: Player): number?
+					return pings[player]
+				end,
+			})
+			Hydrogen.test({ players = { "Alice", "Bob" } }, function(t, alice, bob)
+				local clock = t.clock :: Hydrogen.FakeClock
+				pings[alice] = 0.4
+				pings[bob] = 5 -- lag-switching: capped at maxPing
+				check.equal(Guards.ping(alice), 0.4)
+				local rejections, onReject = recorder()
+				Cast:On(noop)
+				Cast:Use(Guards.timestamp({ maxPing = 1, onReject = onReject }))
+
+				clock:setServerOffset(-0.5)
+				t:as(alice, function()
+					Cast:Fire(Clock.serverNow()) -- 0.5 old, at most 0.6
+				end)
+				clock:setServerOffset(-2)
+				t:as(bob, function()
+					Cast:Fire(Clock.serverNow()) -- 2 old, at most 1.2
+				end)
+
+				t:expect(Cast):firedBy(alice, t.any):firedTimes(1)
+				check.equal(rejections[1], `guards-Cast{made}: timestamp too old (2.00s, at most 1.20s)`)
+			end)
+			Guards.resetConfiguration()
+		end)
+
+		test.case("configure sets the default cap; a guard's own maxPing wins", function()
+			remotes()
+			Guards.configure({
+				ping = function(_player: Player): number?
+					return 5
+				end,
+				maxPing = 2,
+			})
+			Hydrogen.test({ players = 1 }, function(_t, alice)
+				local context = { name = "x", kind = "ClientEvent", direction = "incoming", payload = "event", player = alice } :: any
+				local stamp = Clock.serverNow() - 2
+				check.equal(Guards.timestamp()(context, stamp), stamp) -- 2 old, at most 2.2
+				check.equal(Guards.timestamp({ maxPing = 1 })(context, stamp), Hydrogen.DROP) -- at most 1.2
+				Guards.resetConfiguration()
+				Guards.configure({
+					ping = function(_player: Player): number?
+						return 5
+					end,
+				})
+				check.equal(Guards.timestamp()(context, stamp), Hydrogen.DROP) -- back to the 1 s default
+			end)
+			Guards.resetConfiguration()
+		end)
+
+		test.case("ping reads GetNetworkPing, and an unknown or broken ping counts as 0", function()
+			remotes()
+			Hydrogen.test({ players = { "Alice", "Bob" } }, function(_t, alice, bob)
+				check.equal(Guards.ping(alice), 0) -- fake players have no GetNetworkPing
+				;(bob :: any).GetNetworkPing = function(): number
+					return 0.12
+				end
+				check.equal(Guards.ping(bob), 0.12)
+
+				Guards.configure({
+					ping = function(_player: Player): number?
+						error("ping exploded")
+					end,
+				})
+				check.equal(Guards.ping(bob), 0)
+				Guards.configure({
+					ping = function(_player: Player): number?
+						return 0 / 0
+					end,
+				})
+				check.equal(Guards.ping(bob), 0)
+			end)
+			Guards.resetConfiguration()
+		end)
+
+		test.case("arg and timestamp pick the stamp; anything but a finite number is invalid", function()
+			remotes()
+			Hydrogen.test({ players = 1 }, function(_t, alice)
+				local context = { name = "x", kind = "ClientEvent", direction = "incoming", payload = "event", player = alice } :: any
+				local now = Clock.serverNow()
+
+				local second = Guards.timestamp({ arg = 2 })
+				check.equal(second(context, "label", now), "label")
+				check.equal(second(context, "label", now - 1), Hydrogen.DROP)
+				check.equal(second(context, "label", 0 / 0), Hydrogen.DROP)
+				check.equal(second(context, "label", math.huge), Hydrogen.DROP)
+				check.equal(second(context, "label", "soon"), Hydrogen.DROP)
+
+				local field = Guards.timestamp({
+					timestamp = function(_player: Player, action: any): any
+						return action.at
+					end,
+				})
+				local action = { at = now }
+				check.equal(field(context, action), action)
+				check.equal(field(context, { at = now + 1 }), Hydrogen.DROP)
+			end)
+		end)
+
+		test.case("bad options error at the call", function()
+			check.is_false(pcall(Guards.timestamp, { arg = 0 } :: any))
+			check.is_false(pcall(Guards.timestamp, { tolerance = -1 } :: any))
+			check.is_false(pcall(Guards.timestamp, { maxPing = 0 / 0 } :: any))
+			check.is_false(pcall(Guards.timestamp, { future = math.huge } :: any))
+			check.is_false(pcall(Guards.timestamp, { timestamp = 5 } :: any))
+			check.is_false(pcall(Guards.configure, { ping = 0.1 } :: any))
+			check.is_false(pcall(Guards.configure, { maxPing = -1 } :: any))
+			return nil
+		end)
+	end)
+
 	test.suite("Guards predicates and composition", function()
 		test.case("check gets the raw arguments and can give a reason", function()
 			remotes()
