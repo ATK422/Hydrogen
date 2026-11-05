@@ -1,4 +1,4 @@
-# Hydrogen.Guards (cooldowns, roles, permissions, range checks, predicates)
+# Hydrogen.Guards (cooldowns, roles, permissions, range checks, timestamps, predicates)
 
 > Server-side game rules for incoming network traffic, written as middleware: attach a guard with `:Use()`, `:UseRequest()` or `Hydrogen.useMiddleware`. A rejected event is dropped; a rejected function request errors back to the client with the reason. Cooldowns and roles also work from game code.
 
@@ -8,6 +8,7 @@ Use it when:
 - An action has a cooldown, charges, or a shared/global cooldown ("Ability1 every 5 s", "2 dashes").
 - Only some players may send something: admins, moderators, group ranks, game-pass owners, a custom list.
 - A client names a target (position, part, model, player) that must be near their character.
+- A client stamps an action with `Clock.serverNow()` and the server settles contested moments with it (who blocked first): `Guards.timestamp()` stops backdating.
 - Any other per-message rule: write `Guards.check(fn)` and combine with `Guards.all` / `Guards.any`.
 
 Don't use it when:
@@ -101,8 +102,25 @@ Guards.range(studs: number, options: RangeOptions?): Guard
 type RangeOptions = GuardOptions & { arg: number?, target: ((player: Player, ...any) -> any)?, slack: number? }
 Guards.inRange(player: Player, target: any, studs: number, slack: number?): boolean
 Guards.distance(player: Player, target: any): (number?, string?)  -- nil, "no character" | "invalid target"
-Guards.configure(options: { position: ((player: Player) -> Vector3?)?, slack: number? }): ()
-Guards.resetConfiguration(): ()                                   -- default position lookup, slack 4
+
+-- Timestamps (server)
+Guards.timestamp(options: TimestampOptions?): Guard
+type TimestampOptions = GuardOptions & {
+	arg: number?,                                      -- argument holding the stamp; default 1
+	timestamp: ((player: Player, ...any) -> any)?,     -- picks the stamp instead of arg
+	tolerance: number?,                                -- seconds allowed on top of ping; default 0.2
+	maxPing: number?,                                  -- ping cap; default configure's maxPing (1)
+	future: number?,                                   -- seconds a stamp may be ahead; default 0.05
+}
+Guards.ping(player: Player): number  -- seconds: Player:GetNetworkPing(), or configure's ping; 0 when unknown
+
+Guards.configure(options: {
+	position: ((player: Player) -> Vector3?)?,  -- range: where the character is
+	slack: number?,                             -- range: default slack in studs (4)
+	ping: ((player: Player) -> number?)?,       -- timestamps: a player's latency in seconds
+	maxPing: number?,                           -- timestamps: default ping cap in seconds (1)
+}): ()
+Guards.resetConfiguration(): ()  -- default position lookup, slack 4, GetNetworkPing, maxPing 1
 
 -- Predicates and composition (server)
 Guards.check(predicate: (player: Player, ...any) -> (boolean, string?), options: GuardOptions?): Guard
@@ -112,9 +130,9 @@ Guards.onReject(hook: (context: Hydrogen.MiddlewareContext, reason: string) -> (
 Guards.isGuard(value: any): boolean
 ```
 
-Exported types: `Hydrogen.Guard`, `Hydrogen.GuardOptions`, `Hydrogen.GuardRejectHook`, `Hydrogen.Cooldown`, `Hydrogen.CooldownOptions`, `Hydrogen.RoleResolver`, `Hydrogen.RoleSource`, `Hydrogen.GuardPredicate`, `Hydrogen.RangeOptions`, `Hydrogen.GuardsConfigureOptions`.
+Exported types: `Hydrogen.Guard`, `Hydrogen.GuardOptions`, `Hydrogen.GuardRejectHook`, `Hydrogen.Cooldown`, `Hydrogen.CooldownOptions`, `Hydrogen.RoleResolver`, `Hydrogen.RoleSource`, `Hydrogen.GuardPredicate`, `Hydrogen.RangeOptions`, `Hydrogen.TimestampOptions`, `Hydrogen.GuardsConfigureOptions`.
 
-Reasons sent by built-in guards: `<name> is on cooldown (2.5s left)` (or `on cooldown (...)` without a name), `missing role "<role>"`, `missing permission "<permission>"`, `target out of range (31.2 studs, at most 24)`, `invalid target`, `no character`, `not allowed` (a `check` with no reason, or one that errored).
+Reasons sent by built-in guards: `<name> is on cooldown (2.5s left)` (or `on cooldown (...)` without a name), `missing role "<role>"`, `missing permission "<permission>"`, `target out of range (31.2 studs, at most 24)`, `invalid target`, `no character`, `timestamp too old (0.84s, at most 0.45s)`, `timestamp from the future (0.31s ahead)`, `invalid timestamp`, `not allowed` (a `check` with no reason, or one that errored).
 
 ## Rules
 
@@ -129,6 +147,7 @@ Reasons sent by built-in guards: `<name> is on cooldown (2.5s left)` (or `on coo
 - **Unknown names error:** `Guards.hasRole` / `Guards.role` with an undefined role, or `can` / `permission` with an undefined permission, raise `[HYDROGEN] Unknown role ...` when checked. Inside middleware the message is lost and the error is printed. Define roles before players can send.
 - **Defining twice errors.** Define roles at module top level, not in `init`, because `init` runs again in every test. Use the returned remover to redefine.
 - **Range:** distance is from the sender's character position (`HumanoidRootPart`, else `PrimaryPart`, or `Guards.configure({ position })`) to the target, and passes when it is at most `studs + slack`. Default slack is 4 studs. Targets can be `Vector3`, `CFrame`, `BasePart`, `Model` (pivot), `Attachment` (`WorldPosition`) or a `Player` (their character). NaN or infinite positions, other types, and Instances that error are `invalid target`. No character means `no character`.
+- **Timestamps:** the stamp is the client's `Hydrogen.Clock.serverNow()` when it acted. With `age = Clock.serverNow() - stamp` on the server, a message passes when `-future <= age <= min(ping, maxPing) + tolerance`. Anything but a finite number is `invalid timestamp`. Ping is `Player:GetNetworkPing()` unless `Guards.configure({ ping })` replaces it; an unknown or broken ping counts as 0, which only narrows the window. `maxPing` caps how much a laggy or lag-switching client can backdate; set it per guard or for every timestamp guard with `Guards.configure({ maxPing = 0.5 })`. The guard only bounds the stamp: the server still decides what a stamp means (who acted first).
 - **Cleanup:** cooldown state and cached roles for a player are cleared when they leave (`Players.PlayerRemoving`, or the loopback's leave). Nothing new is stored for a player who has left. Tracking starts on first use, so a game that never uses Guards pays nothing.
 - **Cost:** a cooldown is one number per player (two with `gap`). A cached role check is two table lookups. Passing messages allocate nothing.
 
@@ -206,8 +225,33 @@ Remotes.Craft:On(function(player: Player, recipe: string)
 end)
 ```
 
+### Reject backdated actions
+
+```luau
+-- shared: Combat.Block = Hydrogen.clientEvent("Block", gt.number()) -- the client's Clock.serverNow()
+-- server system, in init:
+Combat.Block:Use(Guards.timestamp())
+Combat.Block:On(function(player: Player, at: number)
+	blockStartedAt[player] = at -- bounded: at most ping (capped) + 0.2 s old, never in the future
+end)
+
+-- client:
+Combat.Block:Fire(Hydrogen.Clock.serverNow())
+
+-- test: skew a fake client's clock to backdate
+Hydrogen.test({ systems = { CombatServer }, players = 1 }, function(t, player)
+	(t.clock :: Hydrogen.FakeClock):setServerOffset(-1, player)
+	t:as(player, function()
+		Combat.Block:Fire(Hydrogen.Clock.serverNow())
+	end)
+	t:expect(Combat.Block):notFired()
+end)
+```
+
 ## Mistakes
 
+- Don't trust a client's timestamp as sent. Do `Remote:Use(Guards.timestamp({ arg = n }))`, and stamp with `Hydrogen.Clock.serverNow()` on the client, never `os.clock()` or `tick()`.
+- Don't raise `maxPing` to make laggy players pass. Every second of cap is a second a cheater can backdate; raise `tolerance` a little instead, or accept that very laggy players lose ties.
 - Don't hand-roll `if not ADMINS[player.UserId] then return Hydrogen.DROP end` in every middleware. Use `Guards.role("admin")`, which caches and gives function callers a reason.
 - Don't call `Guards.defineRole` inside a system's `init`. It runs once per app and errors the second time, for example in the next test. Define roles at module top level.
 - Don't put a cooldown guard on its own before other guards in separate `:Use` calls and expect atomicity. Combine them in one `Guards.all(...)`, which uses cooldowns only when everything passes.
@@ -283,6 +327,10 @@ end)
 | `[HYDROGEN] Guards.all needs at least one guard` / `Guards.any needs at least one guard` | Empty combinator. |
 | `[HYDROGEN] Guards.cooldown expects a positive number of seconds ...` / `charges must be a whole number ...` / `gap must be ...` / `group must hold cooldowns ...` | Fix the cooldown options. |
 | `[HYDROGEN] Guards.range expects a non-negative number of studs ...` / `arg must be an argument position ...` / `slack must be ...` | Fix the range options. |
+| `[HYDROGEN] Guards.timestamp arg must be an argument position ...` / `tolerance must be ...` / `maxPing must be ...` / `future must be ...` / `timestamp must be a function ...` | Fix the timestamp options. |
+| `[HYDROGEN] Guards.timestamp timestamp function failed on <name>: <err>` (warning) | Your `timestamp` picker errored. Rejected as `invalid timestamp`. |
+| `[HYDROGEN] Guards ping function failed; treating the ping as 0: <err>` (warning) | `configure({ ping })` errored. The window narrows to `tolerance`. |
+| `[HYDROGEN] Guards.configure ping must be a function ...` / `maxPing must be a non-negative number ...` | Fix the configure options. |
 | `[HYDROGEN] Guards.userIds ...` / `Guards.groupRank ...` / `Guards.gamePass ...` | Wrong resolver argument types or a rank outside 1-255. |
 
 ## Works with
@@ -292,4 +340,5 @@ end)
 - `commands.md`: a command's `permission = "name"` is answered by `Guards.can` when you defined a permission with that name, or `Guards.hasRole` for a role with that name. `Guards.invalidate(player)` (and defining or removing a role) resends command lists, so `help` and autocomplete stay right.
 - `debug.md`: define the permission `"debug"` (`Guards.definePermission("debug", { "staff" })`) to let those players open the overlay's server data in live servers.
 - `character.md` / character hooks: range checks read `player.Character`, which the harness's `t:spawnCharacter` sets, so range guards work in tests with fake characters.
+- `clock.md`: `Clock.serverNow()` is what clients stamp actions with; in tests `t.clock:setServerOffset(seconds, player)` makes a client's stamps late or early.
 - `config.md`: a Config segment can be a role (`segments = { Staff = function(player) return Guards.hasRole(player, "staff") end }`); call `Config.reevaluate(player)` after `Guards.invalidate(player)`.

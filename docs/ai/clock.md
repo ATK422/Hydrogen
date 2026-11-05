@@ -249,6 +249,8 @@ local remaining = math.max(0, endsAt - Hydrogen.Clock.serverNow())
 -- Test with skew: t.clock:setServerOffset(0.15, player), then read it inside t:as(player, fn)
 ```
 
+A client-sent stamp (`Remote:Fire(Hydrogen.Clock.serverNow())`) is untrusted: bound it on the server with `Hydrogen.Guards.timestamp()` (guards.md), which rejects stamps from the future or older than the sender's ping plus a tolerance.
+
 ### Saved timestamps
 
 ```luau

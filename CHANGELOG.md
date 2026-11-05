@@ -2,6 +2,12 @@
 
 All notable changes to Hydrogen are listed here. Versions follow [Semantic Versioning](https://semver.org); while the version is `0.x`, a minor bump can contain breaking changes.
 
+## 0.5.2
+
+### Added
+
+- `Hydrogen.Guards.timestamp(options?)`: drops a message whose `Clock.serverNow()` stamp is from the future, or older than the sender's ping (capped by `maxPing`) plus `tolerance`, so a client can't backdate an action. `Guards.ping(player)` reads `Player:GetNetworkPing()`, and `Guards.configure` takes `ping` (a replacement source, e.g. for tests) and `maxPing` (the default cap, 1 second). New type `Hydrogen.TimestampOptions`.
+
 ## 0.5.1
 
 ### Added

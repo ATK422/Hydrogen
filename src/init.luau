@@ -117,6 +117,7 @@ export type RoleSource = Guards.RoleSource
 export type GuardPredicate = Guards.Predicate
 export type RangeOptions = Guards.RangeOptions
 export type GuardsConfigureOptions = Guards.ConfigureOptions
+export type TimestampOptions = Guards.TimestampOptions
 export type CommandSpec = Commands.CommandSpec
 export type CommandContext = Commands.CommandContext
 export type CommandArg = Commands.Arg
