@@ -11,6 +11,8 @@ export type FakeClockOptions = {
 	now: number?,
 	-- What Clock.time() starts at, in Unix seconds. Defaults to the real os.time().
 	time: number?,
+	-- What Clock.serverNow() starts at. Defaults to the time option, so both read as Unix seconds.
+	serverNow: number?,
 }
 
 export type FakeClock = {
@@ -24,6 +26,12 @@ export type FakeClock = {
 	-- Timers (delays and timed waits) still waiting.
 	pending: (self: FakeClock) -> number,
 	now: (self: FakeClock) -> number,
+	-- Same as Clock.serverNow() outside any client.
+	serverNow: (self: FakeClock) -> number,
+	-- Shifts Clock.serverNow() by seconds while code runs as this loopback client (t:as, and
+	-- the client's listeners), to simulate clock skew and latency. Without a player, every
+	-- client that has no offset of its own. 0 clears it.
+	setServerOffset: (self: FakeClock, seconds: number, player: Player?) -> (),
 	-- Puts the real clock back. Threads still waiting on the fake clock are never resumed.
 	restore: (self: FakeClock) -> (),
 }
@@ -52,6 +60,38 @@ Clock.delay = task.delay :: <A...>(seconds: number, fn: ((A...) -> ()) | thread,
 -- Stops a thread made by Clock.delay before it runs.
 Clock.cancel = task.cancel :: (thread: thread) -> ()
 
+-- Under Lune there is no Roblox server clock. One process plays both sides there, so its own
+-- monotonic clock agrees with itself.
+local function resolveServerNow(): () -> number
+	local ok, method = pcall(function()
+		return (workspace :: any).GetServerTimeNow
+	end)
+	if ok and type(method) == "function" then
+		return function(): number
+			return workspace:GetServerTimeNow()
+		end
+	end
+	return os.clock
+end
+
+local serverSource: (() -> number)? = nil
+
+-- Seconds on the server's clock, which the server and every client agree on
+-- (workspace:GetServerTimeNow()). For timestamps one side sets and the other compares,
+-- such as when an ability started or where a meter was at a moment.
+function Clock.serverNow(): number
+	local source = serverSource
+	if not source then
+		source = resolveServerNow()
+		serverSource = source
+	end
+	return source()
+end
+
+-- Set by an open loopback: the client the running code belongs to, if any. The fake clock
+-- reads it to apply per-client server time offsets.
+Clock._client = nil :: (() -> Player?)?
+
 -- Calls fn(dt) at the end of every frame. Returns a function that disconnects it.
 function Clock.heartbeat(fn: (dt: number) -> ()): () -> ()
 	local connection = game:GetService("RunService").Heartbeat:Connect(fn)
@@ -66,6 +106,7 @@ local MAX_TIMERS_PER_ADVANCE = 100000
 local real = {
 	now = Clock.now,
 	time = Clock.time,
+	serverNow = Clock.serverNow,
 	wait = Clock.wait,
 	delay = Clock.delay,
 	cancel = Clock.cancel,
@@ -83,6 +124,10 @@ function Clock.fake(options: FakeClockOptions?): FakeClock
 	local now = (options and options.now) or 0
 	local timeBase = (options and options.time) or os.time()
 	local nowBase = now
+	local serverBase = (options and options.serverNow) or timeBase
+	-- Per-client server time offsets; everyOffset applies to clients without their own.
+	local offsets: { [any]: number } = {}
+	local everyOffset = 0
 	local timers: { Timer } = {}
 	local scheduled = 0
 	local frameWaiters: { { thread: thread, since: number } } = {}
@@ -182,11 +227,37 @@ function Clock.fake(options: FakeClockOptions?): FakeClock
 		return now
 	end
 
+	local function serverNow(client: any): number
+		local value = serverBase + now - nowBase
+		if client ~= nil then
+			value += offsets[client] or everyOffset
+		end
+		return value
+	end
+
+	function fake:serverNow(): number
+		return serverNow(nil)
+	end
+
+	function fake:setServerOffset(seconds: number, player: Player?)
+		if type(seconds) ~= "number" or seconds ~= seconds or math.abs(seconds) == math.huge then
+			error(`[HYDROGEN] setServerOffset expects a finite number of seconds`, 2)
+		end
+		if player == nil then
+			everyOffset = seconds
+		elseif seconds == 0 then
+			offsets[player] = nil
+		else
+			offsets[player] = seconds
+		end
+	end
+
 	function fake:restore()
 		if installed ~= fake then
 			return
 		end
 		installed = nil
+		table.clear(offsets)
 		table.clear(timers)
 		table.clear(frameWaiters)
 		table.clear(listeners)
@@ -201,6 +272,11 @@ function Clock.fake(options: FakeClockOptions?): FakeClock
 
 	Clock.time = function(): number
 		return math.floor(timeBase + now - nowBase)
+	end
+
+	Clock.serverNow = function(): number
+		local client = Clock._client
+		return serverNow(if client then client() else nil)
 	end
 
 	Clock.wait = function(seconds: number?): number

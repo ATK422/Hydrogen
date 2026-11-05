@@ -5,6 +5,11 @@ local test = frktest.test
 local check = frktest.assert.check
 
 local Clock = require("../src/Clock")
+local Hydrogen = require("../src")
+
+local function near(actual: number, expected: number)
+	check.is_true(math.abs(actual - expected) < 1e-9)
+end
 
 return function()
 	-- A failing test must not leave the fake clock installed for the next one.
@@ -31,6 +36,85 @@ return function()
 			check.equal(Clock.now, os.clock)
 			check.equal(Clock.wait, task.wait)
 			check.equal(Clock.active(), nil)
+			return nil
+		end)
+
+		test.case("serverNow reads a real clock outside the fake", function()
+			local first = Clock.serverNow()
+			check.equal(type(first), "number")
+			check.is_true(Clock.serverNow() >= first)
+			return nil
+		end)
+
+		test.case("the fake clock drives serverNow from its start value", function()
+			local real = Clock.serverNow
+			local fake = Clock.fake({ now = 5, time = 1000 })
+			check.equal(Clock.serverNow(), 1000)
+			fake:advance(2.5)
+			check.equal(Clock.serverNow(), 1002.5)
+			check.equal(fake:serverNow(), 1002.5)
+			fake:restore()
+
+			local custom = Clock.fake({ serverNow = 50 })
+			custom:advance(1)
+			check.equal(Clock.serverNow(), 51)
+			custom:restore()
+			check.equal(Clock.serverNow, real)
+			return nil
+		end)
+
+		test.case("server offsets apply per client, and to every client without one", function()
+			local fake = Clock.fake({ serverNow = 100 })
+			local alice, bob = {}, {}
+			local running: any = nil
+			Clock._client = function()
+				return running
+			end
+
+			fake:setServerOffset(-0.2, alice :: any)
+			fake:setServerOffset(0.05)
+			check.equal(Clock.serverNow(), 100)
+			running = alice
+			near(Clock.serverNow(), 99.8)
+			running = bob
+			near(Clock.serverNow(), 100.05)
+			fake:setServerOffset(0, alice :: any)
+			running = alice
+			near(Clock.serverNow(), 100.05)
+			check.equal(fake:serverNow(), 100)
+
+			check.is_false(pcall(fake.setServerOffset, fake, 0 / 0))
+			check.is_false(pcall(fake.setServerOffset, fake, math.huge))
+
+			Clock._client = nil
+			fake:restore()
+			return nil
+		end)
+
+		test.case("loopback clients see their own server time offset", function()
+			local behind: number? = nil
+			local Ping = Hydrogen.serverEvent("ClockOffsetPing", Hydrogen.gt.number())
+			local Pinger = Hydrogen.define("ClockOffsetPinger", function()
+				local Pinger = {}
+				function Pinger:start()
+					Ping:On(function(sentAt: number)
+						behind = Hydrogen.Clock.serverNow() - sentAt
+					end)
+				end
+				return Pinger
+			end)
+
+			Hydrogen.test({ systems = { Pinger }, players = 1, clock = { serverNow = 500 } }, function(t, player)
+				(t.clock :: Clock.FakeClock):setServerOffset(0.1, player)
+				Ping:Fire(player, Hydrogen.Clock.serverNow())
+				t:advance(0)
+				check.equal(Hydrogen.Clock.serverNow(), 500)
+				t:as(player, function()
+					near(Hydrogen.Clock.serverNow(), 500.1)
+				end)
+			end)
+			near(behind :: number, 0.1)
+			check.equal(Clock._client, nil)
 			return nil
 		end)
 
