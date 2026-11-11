@@ -144,6 +144,8 @@ export type MeterOptions = {
 	value: number?,
 	-- Units per second the value starts moving at; negative drains. Defaults to 0.
 	rate: number?,
+	-- Seconds of past values the server keeps for getAt, e.g. 1.5. Off by default.
+	history: number?,
 	encode: boolean?,
 }
 
@@ -158,6 +160,8 @@ export type PlayerMeterOptions = {
 	predict: boolean?,
 	-- Seconds a prediction shows if no update from the server arrives. Defaults to 1.
 	predictTimeout: number?,
+	-- Seconds of past values the server keeps for getAt, e.g. 1.5. Off by default.
+	history: number?,
 	encode: boolean?,
 }
 
@@ -167,6 +171,9 @@ export type Meter = {
 	-- The value now, worked out from the last change, the rate and Clock.serverNow(), within
 	-- [min, max]. Costs a little arithmetic; call it every frame for UI.
 	get: (self: Meter) -> number,
+	-- Server, needs the history option: the value at a past server time, such as a client's
+	-- Clock.serverNow() stamp checked by Guards.timestamp. nil if older than history.
+	getAt: (self: Meter, serverTime: number) -> number?,
 	-- Units per second.
 	getRate: (self: Meter) -> number,
 	getRange: (self: Meter) -> (number, number),
@@ -188,6 +195,7 @@ export type PlayerMeter = {
 	name: string,
 	event: Event,
 	get: (self: PlayerMeter, player: Player) -> number,
+	getAt: (self: PlayerMeter, player: Player, serverTime: number) -> number?,
 	getRate: (self: PlayerMeter, player: Player) -> number,
 	getRange: (self: PlayerMeter, player: Player) -> (number, number),
 	set: (self: PlayerMeter, player: Player, value: number) -> (),
@@ -434,6 +442,23 @@ function MeterOps.get(state, player)
 	return Meter.get(state, player)
 end
 
+function MeterOps.getAt(state, player, serverTime)
+	if Store.context() ~= Store.SERVER then
+		error(`[HYDROGEN] State {state.name}: getAt reads the server's past values and runs on the server only; a client reads its meter with get()`, 3)
+	end
+	if state.meter.history == 0 then
+		local constructor = if state.perPlayer then "playerMeter" else "meter"
+		error(
+			`[HYDROGEN] State {state.name}: getAt needs history in the meter options, e.g. State.{constructor}("{state.name}", \{ max = 100, history = 1.5 }); make it at least Guards.timestamp's window (maxPing + tolerance, 1.2 s by default)`,
+			3
+		)
+	end
+	if not finite(serverTime) then
+		error(`[HYDROGEN] State {state.name}: getAt expects a server time (a finite number from Clock.serverNow()), got {describe(serverTime)}`, 3)
+	end
+	return Meter.getAt(state, player, serverTime)
+end
+
 function MeterOps.getRate(state, player)
 	return Meter.getRate(state, player)
 end
@@ -605,8 +630,8 @@ type Spec = {
 	initial: any?,
 }
 
-local METER_OPTIONS = { "min", "max", "value", "rate", "encode" }
-local PLAYER_METER_OPTIONS = { "min", "max", "value", "rate", "visibleTo", "predict", "predictTimeout", "encode" }
+local METER_OPTIONS = { "min", "max", "value", "rate", "history", "encode" }
+local PLAYER_METER_OPTIONS = { "min", "max", "value", "rate", "history", "visibleTo", "predict", "predictTimeout", "encode" }
 
 -- Checks a meter's options. Errors are raised at the caller of State.meter / State.playerMeter:
 -- meterConfig <- define <- constructor <- caller.
@@ -659,6 +684,11 @@ local function meterConfig(name: string, options: { [any]: any }, perPlayer: boo
 		end
 	end
 
+	local history = options.history
+	if history ~= nil and (not finite(history) or history <= 0) then
+		error(`[HYDROGEN] State {name}: history must be a positive number of seconds, e.g. history = 1.5, got {describe(history)}`, 4)
+	end
+
 	return {
 		min = min,
 		max = max,
@@ -666,6 +696,7 @@ local function meterConfig(name: string, options: { [any]: any }, perPlayer: boo
 		rate = rate,
 		predict = predict == true,
 		predictTimeout = timeout or 1,
+		history = history or 0,
 		resting = { value = value, rate = 0, min = min, max = max, at = 0, started = true },
 	}
 end
