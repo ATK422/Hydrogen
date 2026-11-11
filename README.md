@@ -9,7 +9,7 @@ A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you:
 - **The kit**: the modules most games end up writing themselves, each free until you use it. Saving with `Data`, per-player and replicated state with `PlayerState` and `State`, purchases with `Receipts`, cleanup with `Scope`, plus `Log`, `Signal`, `Scheduler`, tagged-instance `Component`s, client `Input`, server-side `Guards`, in-game `Commands`, `Config` and feature flags, a `Debug` overlay, and cross-server `Teleport` (with Data hand-off) and `Messaging`.
 - **Tools**: `pesde x atk422/create_hydrogen` starts a new game, and `pesde x atk422/hydrogen_lint` checks its network before you playtest.
 
-Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current version: **0.5.3** (see [CHANGELOG.md](CHANGELOG.md)). License: MIT.
+Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current version: **0.5.4** (see [CHANGELOG.md](CHANGELOG.md)). License: MIT.
 
 ---
 
@@ -2420,7 +2420,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 547 | Passed: 547` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 552 | Passed: 552` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 

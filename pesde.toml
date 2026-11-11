@@ -1,5 +1,5 @@
 name = "atk422/hydrogen"
-version = "0.5.3"
+version = "0.5.4"
 description = "A mildly opinionated luau framework/bootstrapper"
 authors = ["atk422"]
 license = "MIT"
