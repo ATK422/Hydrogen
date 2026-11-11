@@ -5,10 +5,10 @@
 
 return {
 	-- The generator's own version, printed by --version. Keep it in step with pesde.toml.
-	cli = "0.1.2",
+	cli = "0.1.3",
 
 	-- pesde dependency requirement for Hydrogen in the generated pesde.toml.
-	hydrogen = "^0.5.1",
+	hydrogen = "^0.5.4",
 
 	-- Rokit tools: rokit.toml entries are `<name> = "<repo>@<version>"`.
 	tools = {

@@ -18,6 +18,7 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
   - `testing.md` and the README list the Lune differences that remain, with what to do instead.
 - Strict mode: a `Component.new` options table whose `construct` returns nothing type-checks (it failed with "Not all codepaths in this function return 'T'"). New types `Hydrogen.ComponentPlainOptions<I, A>` and `Hydrogen.ComponentIdentity`.
 - Components on the same tag no longer share a system id (T6). The id is `"<tag> component"` when the defining module is named after the tag, else `"<Module> (<tag> component)"`, and `Component.new(tag, options, { id = "..." })` sets it.
+- `create_hydrogen` 0.1.3: new projects pin Hydrogen `^0.5.4`, and the generated `test/Roblox.luau` installs a correct `CFrame.lookAt`.
 - CI type-checks `test/Types/`, strict game code calling Hydrogen, with that luau-lsp version, so these can't come back.
 
 ## 0.5.3
