@@ -42,3 +42,16 @@ Played:FireAll("M2", 4)
 local Ask: Hydrogen.ClientFunction<(Move), (boolean)> =
 	Hydrogen.clientFunction("TypesAsk", gt.args(MoveSchema), gt.returns(gt.boolean())) :: any
 local _accepted: boolean = Ask:Fire("M1")
+
+-- A meter read at a past server time, such as a client's stamp (H10): getAt returns number?.
+local Mana = Hydrogen.State.playerMeter("TypesMana", { max = 100, rate = 8, history = 1.5 })
+local Charge = Hydrogen.State.meter("TypesCharge", { max = 10, history = 2 })
+local Cast: Hydrogen.ClientEvent<number> = Hydrogen.clientEvent("TypesCast", gt.number())
+Cast:Use(Hydrogen.Guards.timestamp())
+Cast:On(function(player: Player, castAt: number)
+	local mana: number? = Mana:getAt(player, castAt)
+	local charge: number? = Charge:getAt(castAt)	if mana and charge and mana >= 85 and mana <= 95 then
+		Mana:add(player, -40)
+	end
+end)
+Cast:Fire(Hydrogen.Clock.serverNow())

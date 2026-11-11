@@ -4,6 +4,11 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
 
 ## Unreleased
 
+### Added
+
+- Meters can be read at a past server time on the server: `PlayerMeter:getAt(player, serverTime)` and `StateMeter:getAt(serverTime)` return the value from the segment that was in force then (clamped to its range), or `nil` when the time is older than the new `history` option. Paired with `Guards.timestamp()`, a client action is judged at the moment the player acted rather than when the request arrived, which replaces flat tolerances on `get()`. `history = seconds` is opt-in: without it nothing is kept and `getAt` errors with the option to add. Past segments are kept only on writes, pruned to the window on each write and capped at 128 per meter per player, and dropped when a player leaves. `docs/ai/state.md` has a "Judge an action at the moment the player acted" recipe.
+- `MeterOptions` and `PlayerMeterOptions` take `history: number?`.
+
 ### Fixed
 
 - Strict type errors in game code with the luau-lsp version `create_hydrogen` pins (1.70.1), which failed a new project's own type check:

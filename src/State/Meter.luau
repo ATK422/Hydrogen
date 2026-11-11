@@ -6,9 +6,10 @@
 -- costs nothing and sends nothing; only set, add, setRate, setRange and sync send a segment.
 -- Timestamps are Clock.serverNow(), which server and clients agree on.
 --
--- Two things live on one side only, in cell.aux: a client's predicted segment, which shows
--- instead of the received one until the next one arrives or it times out, and onLimit
--- listeners with the one timer that fires when the value reaches a limit.
+-- Three things live on one side only, in cell.aux: a client's predicted segment, which shows
+-- instead of the received one until the next one arrives or it times out, onLimit listeners
+-- with the one timer that fires when the value reaches a limit, and on the server, for meters
+-- with a history option, the segments the current one replaced, so getAt can read the past.
 
 local Clock = require("../Clock")
 local Log = require("../Log")
@@ -39,6 +40,8 @@ export type Config = {
 	rate: number,
 	predict: boolean,
 	predictTimeout: number,
+	-- Seconds of past segments the server keeps for getAt. 0: none kept, getAt errors.
+	history: number,
 	-- What a replica shows before anything arrives: the initial value, at rest.
 	resting: Segment,
 }
@@ -50,6 +53,9 @@ type Aux = {
 	timer: thread?,
 	-- The limit the value was at when last checked, so each arrival is reported once.
 	last: Limit?,
+	-- Server, with a history option: the segments cell.data replaced, oldest first. Each was in
+	-- force from its at until the next one's (or cell.data's).
+	history: { Segment }?,
 }
 
 local SERVER = Store.SERVER
@@ -58,6 +64,11 @@ local LOCAL = Store.LOCAL
 -- Within a microsecond of a limit counts as there, so a timer due at the crossing sees it
 -- whatever the rounding.
 local TOLERANCE = 1e-6
+
+-- Past segments kept per meter (per player) whatever the history window, so a meter written
+-- many times a second can't grow without bound: 60 writes a second for 2 seconds fits. Times
+-- only the dropped ones covered read as nil, which refuses rather than guesses.
+local MAX_HISTORY = 128
 
 local Meter = {}
 
@@ -363,6 +374,20 @@ function Meter.discard(cell: Cell)
 		aux.timer = nil
 		aux.predictTimer = nil
 		aux.listeners = nil
+		aux.history = nil
+	end
+end
+
+-- Server: a player left. Their meter stays readable for playerRemoving hooks, but its past is
+-- dropped: nothing they send is judged any more.
+function Meter.leave(state: Def, player: Player)
+	if not state.perPlayer then
+		return
+	end
+	local cell = Store.cellAt(state, SERVER, player, false)
+	local aux = cell and cell.aux
+	if aux then
+		aux.history = nil
 	end
 end
 
@@ -398,6 +423,37 @@ function Meter.get(state: Def, player: Player?): number
 		return shown.value
 	end
 	return valueAt(shown, timeIn(ctx))
+end
+
+-- Server, with a history option: the value at server time t, from the segment that was in force
+-- then, clamped to that segment's range. A t after the last write (now, or a stamp a little in
+-- the future) extrapolates the current segment like get(). nil when t is more than `history`
+-- seconds ago, or before the oldest segment kept (the meter started later, the player left, or
+-- the hard cap dropped it).
+function Meter.getAt(state: Def, player: Player?, t: number): number?
+	Store.read(state)
+	local cell = Store.cell(state, SERVER, player, false)
+	if not cell or not cell.data.started then
+		cell = start(state, player)
+	end
+	if t < serverTime() - config(state).history then
+		return nil
+	end
+	local data: Segment = (cell :: Cell).data
+	if t >= data.at then
+		return valueAt(data, t)
+	end
+	local aux = (cell :: Cell).aux
+	local past: { Segment }? = aux and aux.history
+	if past then
+		for index = #past, 1, -1 do
+			local old = past[index]
+			if old.at <= t then
+				return valueAt(old, t)
+			end
+		end
+	end
+	return nil
 end
 
 function Meter.getRate(state: Def, player: Player?): number
@@ -455,7 +511,50 @@ end
 -- Writes (server)
 --------------------------------------------------------------------------------
 
+-- With a history option, keeps the segment a write replaces, and drops what is past the window
+-- (or the hard cap). Only on writes: reads and time passing do nothing.
+local function remember(state: Def, player: Player?, cell: Cell, before: Segment, t: number)
+	local window = config(state).history
+	if window == 0 then
+		return
+	end
+	local aux = auxOf(cell)
+	if player and Store.departed(player) then
+		aux.history = nil
+		return
+	end
+	local past = aux.history
+	if not past then
+		past = {}
+		aux.history = past
+	end
+	-- A segment replaced at the instant it started was never in force: nothing to keep.
+	if before.at < t then
+		table.insert(past, before)
+	end
+
+	-- Each kept segment lasts until the next one starts; drop the ones that ended before the
+	-- window. The current segment (starting at t) always covers the window's end.
+	local cutoff = t - window
+	local drop = 0
+	local count = #past
+	while drop < count do
+		local nextStart = if drop + 1 < count then past[drop + 2].at else t
+		if nextStart > cutoff and count - drop <= MAX_HISTORY then
+			break
+		end
+		drop += 1
+	end
+	if drop > 0 then
+		table.move(past, drop + 1, count, 1)
+		for index = count - drop + 1, count do
+			past[index] = nil
+		end
+	end
+end
+
 local function commit(state: Def, player: Player?, cell: Cell, before: Segment, after: Segment)
+	remember(state, player, cell, before, after.at)
 	cell.data = after
 	Store.written(state, cell, player)
 	Store.within(SERVER, emit, state, SERVER, cell, before)

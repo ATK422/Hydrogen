@@ -8,6 +8,7 @@ Use it when:
 - Late joiners must see the current state without extra code.
 - Collections change a little at a time and should be sent as diffs.
 - A number moves steadily over time (stamina, mana, posture, hunger, temperature, a capture bar): use a meter (`State.meter` / `State.playerMeter`). It sends only when the rate or value jumps, and each side works out the value now.
+- The server must judge a client action by the meter's value when the player acted, not when the request arrived (a spell castable only while mana is 85-95): give the meter `history` and read `getAt(player, stamp)` with a `Guards.timestamp`-checked `Clock.serverNow()` stamp.
 
 Don't use it when:
 - The data is a one-off happening (a hit, a sound, a chat line): fire a `Hydrogen.serverEvent`.
@@ -113,10 +114,11 @@ type MeterOptions = {
 	max: number,    -- required
 	value: number?, -- initial value, default max; must be within [min, max]
 	rate: number?,  -- initial units per second, default 0; negative drains
+	history: number?, -- seconds of past values the server keeps for getAt, e.g. 1.5; off by default
 	encode: boolean?,
 }
 type PlayerMeterOptions = {
-	min: number?, max: number, value: number?, rate: number?, encode: boolean?,
+	min: number?, max: number, value: number?, rate: number?, history: number?, encode: boolean?,
 	visibleTo: ("owner" | "everyone")?, -- default "owner"
 	predict: boolean?,                  -- default false; lets the owning client predictRate / predictAdd
 	predictTimeout: number?,            -- seconds, default 1; only with predict = true
@@ -154,6 +156,7 @@ Every state object has `name: string` and `event: ServerEvent<...any>` (the unde
 
 `StateMeter` (global meter):
 - `get(self): number`: both sides; the value now: `clamp(value + rate * (Clock.serverNow() - at), min, max)` from the last change. Cheap; call it every frame for UI.
+- `getAt(self, serverTime: number): number?`: server only, needs the `history` option; the value at a past server time (a client's `Clock.serverNow()` stamp), from the segment in force then, clamped to that segment's range. A time after the last write, including a stamp slightly in the future, extrapolates like `get()`. `nil` when `serverTime` is more than `history` seconds ago or before the oldest segment kept.
 - `getRate(self): number`, `getRange(self): (number, number)`: both sides; units per second, and `(min, max)`.
 - `set(self, value: number): ()`: server; an instant change, clamped; the rate carries on from it.
 - `add(self, delta: number): ()`: server; `set(get() + delta)`.
@@ -162,7 +165,7 @@ Every state object has `name: string` and `event: ServerEvent<...any>` (the unde
 - `observe(self, observer: (value: number, rate: number) -> ()): () -> ()`: both sides; calls now, then on each change (a write, an update arriving, a prediction or its expiry). Never as time passes.
 - `onLimit(self, listener: (limit: "min" | "max") -> ()): () -> ()`: both sides; called each time the value arrives at min or max, by its rate (on time, from one `Clock.delay`) or by a change. Not called for where it is when connected.
 
-`PlayerMeter`: the same methods with `player: Player` first (`Stamina:get(player)`, `Stamina:setRate(player, -20)`, `Stamina:onLimit(player, fn)`), plus:
+`PlayerMeter`: the same methods with `player: Player` first (`Stamina:get(player)`, `Mana:getAt(player, stamp)`, `Stamina:setRate(player, -20)`, `Stamina:onLimit(player, fn)`), plus:
 - `sync(self, player: Player): ()`: server; sends the segment again though nothing changed, so the owner's prediction is replaced now (use it when turning a request down).
 - `predictRate(self, player: Player, rate: number): ()`: owning client only, needs `predict = true`; shows the new rate locally from `Clock.serverNow()`.
 - `predictAdd(self, player: Player, delta: number): ()`: owning client only, needs `predict = true`; shows an instant change locally.
@@ -210,6 +213,11 @@ Meters:
 - Prediction (`playerMeter` with `predict = true`) is a local view only. `predictRate` / `predictAdd` change what the owning client's `get`, `getRate`, `observe` and `onLimit` show, starting at that client's `Clock.serverNow()`. They never reach the server: pair each with a `clientEvent` the server handles by calling `setRate` / `add`. The next segment from the server replaces the prediction, whatever it says (that is the confirmation or the correction). With no segment within `predictTimeout` (default 1 s), the prediction is dropped and the server's view shows again. A server write unrelated to the request also replaces it, so a prediction may end early; `sync(player)` forces a correction without changing anything.
 - A player leaving: clients drop their meter (and its limit timers); the server keeps it readable and extrapolating for later `playerRemoving` hooks; writes after leaving are not sent.
 - Computed state that reads a meter recomputes on the meter's changes only, not as its value moves.
+- History (`history = seconds`) is opt-in: without it the server keeps nothing and `getAt` errors. With it, every server write (`set`, `add`, `setRate`, `setRange`) keeps the segment it replaced; `sync` changes nothing, so it keeps nothing. Segments that ended more than `history` seconds before the write are dropped on that write, and at most 128 are kept per meter (per player); nothing runs while time passes. Writes at one instant keep nothing for the segments that never ran.
+- Make `history` at least the oldest stamp you accept: `Guards.timestamp()`'s window is the sender's ping capped at `maxPing` (1 s) plus `tolerance` (0.2 s), so 1.2 s by default; `history = 1.5` covers it.
+- `getAt` answers what the server's meter was at that time. The client saw the same value if it had received the segment in force then; a segment the server wrote shortly before the stamp (within the one-way network delay) may not have reached it yet.
+- `getAt` reads the past as it was, before any write the server made since. A cost paid at `now` (`add(player, -40)`) does not show at an earlier stamp, so a second action stamped before the first was paid reads mana already spent. Refuse stamps older than the last accepted action (see the recipe).
+- A player leaving drops their meter's past (`getAt` for an earlier time returns `nil`); the current segment stays readable. History is server-only; client prediction is unaffected.
 
 ## Recipes
 
@@ -397,6 +405,34 @@ GameState.Cast:On(function(player: Player, spell: string)
 end)
 ```
 
+Judge an action at the moment the player acted (`Mana = State.playerMeter("Mana", { max = 100, rate = 8, history = 1.5 })`, `CastFulgur = Hydrogen.clientEvent("CastFulgur", gt.number())`). Fulgur casts only while mana is 85-95. By the time the request arrives the server's `get()` has charged past 95, so judge the value at the client's stamp instead:
+```luau
+-- client: stamp the cast with the server time it was pressed at
+local mana = GameState.Mana:get(Players.LocalPlayer)
+if mana >= 85 and mana <= 95 then
+	GameState.CastFulgur:Fire(Hydrogen.Clock.serverNow())
+end
+
+-- server
+local spentAt: { [Player]: number } = setmetatable({}, { __mode = "k" }) :: any
+
+-- Drops stamps from the future or older than ping (capped at 1 s) + 0.2 s: within history = 1.5.
+GameState.CastFulgur:Use(Hydrogen.Guards.timestamp())
+GameState.CastFulgur:On(function(player: Player, castAt: number)
+	-- A stamp from before the last cast was paid would read mana that cast already spent.
+	if castAt < (spentAt[player] or -math.huge) then
+		return
+	end
+	local mana = GameState.Mana:getAt(player, castAt) -- what the player saw when they pressed
+	if mana == nil or mana < 85 or mana > 95 then
+		GameState.Mana:sync(player)
+		return
+	end
+	GameState.Mana:add(player, -40) -- the cost comes off the value now
+	spentAt[player] = Hydrogen.Clock.serverNow()
+end)
+```
+
 Hunger that drains on its own, starving at zero (`Hunger = State.playerMeter("Hunger", { max = 100, rate = -0.2 })`):
 ```luau
 function Survival:playerAdded(player: Player)
@@ -436,6 +472,10 @@ A global capture bar everyone sees (`Capture = State.meter("Capture", { min = -1
 - Don't expect `predictRate` / `predictAdd` to change server state. Fire a `clientEvent` and let the server `setRate` / `add`; the client only changes its own view.
 - Don't poll `get()` to detect empty or full on the server (`Heartbeat` checks). Use `onLimit`.
 - Don't use a meter for a number that only jumps (coins, level). A `playerValue` is simpler; meters are for values with a rate.
+- Don't add a flat tolerance to `get()` to forgive latency (`if mana >= 85 - 3 and mana <= 95 + 3`). It is too loose for slow meters and too tight for high ping. Stamp the action with `Clock.serverNow()`, put `Guards.timestamp()` on the event, and judge `getAt(player, stamp)`.
+- Don't call `getAt` with an unchecked stamp. Without `Guards.timestamp()` a client can pick any moment in the last `history` seconds when the value suited it.
+- Don't judge several actions by their stamps without refusing stamps older than the last accepted one. `getAt` reads the past before the cost was paid, so two casts stamped a moment apart would both see full mana.
+- Don't make `history` shorter than the stamps you accept (`history = 0.5` with `Guards.timestamp()`'s 1.2 s window): a high-ping player's honest casts read `nil` and are refused.
 
 ## Testing
 
@@ -489,6 +529,7 @@ end)
 ```
 - Count a meter's messages with middleware on `Stamina.event`, as above; time passing must add none.
 - Test a prediction the server ignores by advancing past `predictTimeout` without a server write: the client's `getRate` returns to the server's.
+- Test `getAt` with a late client: `t.clock:setServerOffset(-0.3, player)` makes that client's `Clock.serverNow()` stamps 0.3 s old when they arrive. Give `Guards.timestamp` a ping that covers it with `Hydrogen.Guards.configure({ ping = function() return 0.3 end })` (fake players have no ping), and call `Hydrogen.Guards.resetConfiguration()` afterwards. On the server, `Mana:getAt(player, stamp)` then returns what that client saw, while `get()` has moved on.
 
 ## Errors and warnings
 
@@ -511,7 +552,10 @@ Errors (raised at the caller's line):
 - `[HYDROGEN] State <name>: <predictRate|predictAdd> needs predict = true in the playerMeter options`: add `predict = true` to the definition.
 - `[HYDROGEN] State <name>: <predictRate|predictAdd> runs on the client that owns the meter; the server changes it with <setRate|add>`: called on the server (or outside `t:as` in a test). On the server write the real value.
 - `[HYDROGEN] State <name>: a client can only predict its own meter; pass Players.LocalPlayer, got <name>`: predict only the local player's meter.
-- Meter definitions: `meter option <min|max|value|rate> must be a finite number[, e.g. { max = 100 }], got <x>`, `meter min (<a>) is greater than max (<b>)`, `the initial value <v> is outside the meter's range (<min> to <max>)`, `unknown meter option <key>; meters take <list>` (usually a typo), `<predict|predictTimeout> only applies to State.playerMeter (...)`, `predict must be true or false`, `predictTimeout only applies with predict = true`, `predictTimeout must be a positive number of seconds`. Fix the options.
+- `[HYDROGEN] State <name>: getAt reads the server's past values and runs on the server only; a client reads its meter with get()`: called on a client (or inside `t:as`). The client's own view is `get()`; send the stamp to the server.
+- `[HYDROGEN] State <name>: getAt needs history in the meter options, e.g. State.playerMeter("<name>", { max = 100, history = 1.5 }); make it at least Guards.timestamp's window (maxPing + tolerance, 1.2 s by default)`: the meter keeps no past. Add `history`.
+- `[HYDROGEN] State <name>: getAt expects a server time (a finite number from Clock.serverNow()), got <x>`: NaN, infinity or a non-number. Pass the stamp the client sent, after `Guards.timestamp()` checked it.
+- Meter definitions: `history must be a positive number of seconds, e.g. history = 1.5, got <x>`, `meter option <min|max|value|rate> must be a finite number[, e.g. { max = 100 }], got <x>`, `meter min (<a>) is greater than max (<b>)`, `the initial value <v> is outside the meter's range (<min> to <max>)`, `unknown meter option <key>; meters take <list>` (usually a typo), `<predict|predictTimeout> only applies to State.playerMeter (...)`, `predict must be true or false`, `predictTimeout only applies with predict = true`, `predictTimeout must be a positive number of seconds`. Fix the options.
 - `[HYDROGEN] Network object State/<name> is already registered; ...`: a network object already uses that name. Rename.
 
 Warnings:
@@ -533,3 +577,4 @@ Warnings:
 - **Scope (`Hydrogen.Scope`):** `observe`, `observeKey`, `onChange` and `observeAll` return disconnect functions, so pass them to a scope: `Hydrogen.Scope.of(self):add(GameState.Round:observe(fn))`, or `Hydrogen.Scope.of(self, player):add(...)` for per-player observers.
 - **Testing (`Hydrogen.loopback` and `Hydrogen.test`):** see Testing. The harness's fake clock drives State's end-of-frame send.
 - **Clock (`Hydrogen.Clock`):** meters timestamp with `Clock.serverNow()` and time `onLimit` and prediction expiry with `Clock.delay`, so the fake clock and `setServerOffset` control them in tests.
+- **Guards (`Hydrogen.Guards`):** `Guards.timestamp()` bounds a client's `Clock.serverNow()` stamp, and a meter's `getAt(player, stamp)` judges the action at that stamp. Keep `history` at least the guard's window (`maxPing` + `tolerance`).

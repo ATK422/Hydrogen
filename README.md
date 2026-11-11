@@ -1041,7 +1041,7 @@ There is nothing to add to the app: defining a state registers its network event
 | `State.map(name, keySchema, valueSchema)` | key → value | everyone | `set` (nil removes), `remove`, `update`, `replace`, `clear` | `get`, `all`, `size`, `observe`, `observeKey`, `onChange` |
 | `State.list(name, itemSchema)` | array | everyone | `push`, `insert`, `remove`, `set`, `replace`, `clear` | `get`, `all`, `size`, `observe` |
 | `State.playerValue` / `playerMap` / `playerList` | the same, per player | the owner, or everyone with `visibleTo = "everyone"` | the same, player first: `Coins:set(player, 10)` | the same, player first: `Coins:get(player)`; plus `observeAll(fn(player, ...))` for every player |
-| `State.meter(name, { max = 100 })` | a number moving at a rate between min and max | everyone | `set`, `add`, `setRate`, `setRange` | `get`, `getRate`, `getRange`, `observe`, `onLimit` |
+| `State.meter(name, { max = 100 })` | a number moving at a rate between min and max | everyone | `set`, `add`, `setRate`, `setRange` | `get`, `getRate`, `getRange`, `observe`, `onLimit`; on the server, `getAt` with `history` |
 | `State.playerMeter(name, options)` | the same, per player | the owner, or everyone with `visibleTo = "everyone"` | the same, player first, plus `sync` | the same, player first, plus `observeAll`; the owner can `predictRate` / `predictAdd` with `predict = true` |
 | `State.computed(fn)` | `fn()` | each side computes its own | none | `get`, `observe` |
 
@@ -1095,12 +1095,37 @@ RunService.RenderStepped:Connect(function()
 end)
 ```
 
-- Options: `min` (default 0), `max` (required), `value` (initial, default `max`), `rate` (initial units per second, default 0), and for `playerMeter` `visibleTo`, `predict` and `predictTimeout` (seconds, default 1). The initial rate starts when the player joins, or when the server first uses the meter.
+- Options: `min` (default 0), `max` (required), `value` (initial, default `max`), `rate` (initial units per second, default 0), `history` (seconds of past values kept for `getAt`, off by default), and for `playerMeter` `visibleTo`, `predict` and `predictTimeout` (seconds, default 1). The initial rate starts when the player joins, or when the server first uses the meter.
 - **Observers fire on changes, not as time passes.** `observe(function(value, rate) end)` is for things that happen on a change; a bar that moves smoothly reads `get()` every frame.
 - **`onLimit(function(limit) end)`** is called with `"min"` or `"max"` when the value gets there, on time, from a single `Clock.delay` rescheduled on each change. A listener costs nothing until connected.
 - **Prediction** is for the owning client and opt-in (`predict = true`). `predictRate` and `predictAdd` change only that client's view, from its `Clock.serverNow()`. The next update from the server replaces the prediction, confirming or correcting it; without one it is dropped after `predictTimeout`. The server never sees it, so pair it with a `clientEvent`, and call `sync(player)` when you turn a request down so the client is corrected at once.
 - A client whose clock is behind the server's holds the value until it catches up rather than running it backwards. Under `Hydrogen.test`, `t:advance` moves meters on every side and `t.clock:setServerOffset(seconds, player)` skews one client.
 - Values are numbers checked to be finite: NaN or infinity in a write, or `min > max`, errors at your line. Writes outside the range are clamped.
+
+**Judging an action at the moment the player acted.** Say a spell casts only while mana is between 85 and 95. The client sees 94 and casts, but by the time the request arrives the server's `get()` has charged on to 97. A flat tolerance is too loose for slow meters and too tight at high ping. Instead, give the meter `history` and judge the value at the client's stamp:
+
+```luau
+-- shared
+local Mana = State.playerMeter("Mana", { max = 100, rate = 8, history = 1.5 }) -- the server keeps 1.5 s of past values
+local CastFulgur = Hydrogen.clientEvent("CastFulgur", gt.number())
+
+-- client
+CastFulgur:Fire(Hydrogen.Clock.serverNow()) -- when the player pressed
+
+-- server
+CastFulgur:Use(Hydrogen.Guards.timestamp()) -- no stamps from the future or older than ping (max 1 s) + 0.2 s
+CastFulgur:On(function(player, castAt)
+	local mana = Mana:getAt(player, castAt) -- what the player saw; nil if older than history
+	if mana and mana >= 85 and mana <= 95 then
+		Mana:add(player, -40)
+	end
+end)
+```
+
+- `getAt(player, serverTime)` (`getAt(serverTime)` on a global meter) runs on the server only, and needs `history`; without it, it errors and says what to set. It returns the value from the segment that was in force at that time, clamped to its range. A time after the last write, such as a stamp slightly ahead of the server's clock, extrapolates like `get()`. It returns `nil` for a time more than `history` seconds ago.
+- History costs nothing until you set it. With it, each server write keeps the segment it replaced and drops those that ended more than `history` seconds ago, at most 128 per meter per player. Nothing runs while time passes. A player leaving drops their meter's past.
+- Make `history` at least the oldest stamp `Guards.timestamp()` lets through: ping (capped at `maxPing`, 1 s) plus `tolerance` (0.2 s), so `history = 1.5` covers the defaults.
+- `getAt` reads the past before any later write, so a cost paid now doesn't show at an earlier stamp. When one action spends what the next one checks, refuse stamps older than the last accepted action. `docs/ai/state.md` has the full recipe.
 
 #### Why it's designed this way
 

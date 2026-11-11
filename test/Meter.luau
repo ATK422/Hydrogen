@@ -8,9 +8,12 @@ local test = frktest.test
 local check = frktest.assert.check
 
 local Hydrogen = require("../src")
+local Store = require("../src/State/Store")
 
 local gt = Hydrogen.gt
 local State = Hydrogen.State
+local Clock = Hydrogen.Clock
+local Guards = Hydrogen.Guards
 
 -- Defined when the suite starts, before any network runs.
 local defs: {
@@ -21,6 +24,10 @@ local defs: {
 	Sprint: Hydrogen.ClientEvent<boolean>,
 	RecipeStamina: Hydrogen.PlayerMeter,
 	RecipeSprint: Hydrogen.ClientEvent<boolean>,
+	Mana: Hydrogen.PlayerMeter,
+	Charge: Hydrogen.StateMeter,
+	Fulgur: Hydrogen.PlayerMeter,
+	CastFulgur: Hydrogen.ClientEvent<number>,
 } = nil :: any
 
 local function define()
@@ -37,7 +44,29 @@ local function define()
 		-- As in the stamina recipe in docs/ai/state.md.
 		RecipeStamina = State.playerMeter("MeterRecipeStamina", { max = 100, rate = 10, predict = true }),
 		RecipeSprint = Hydrogen.clientEvent("MeterRecipeSprint", gt.boolean()),
+		-- With a past for getAt.
+		Mana = State.playerMeter("MeterMana", { max = 100, value = 0, history = 1.5 }),
+		Charge = State.meter("MeterCharge", { max = 10, value = 0, history = 2 }),
+		-- As in the "judge an action at the moment the player acted" recipe in docs/ai/state.md.
+		Fulgur = State.playerMeter("MeterFulgurMana", { max = 100, value = 0, history = 1.5 }),
+		CastFulgur = Hydrogen.clientEvent("MeterCastFulgur", gt.number()),
 	}
+end
+
+-- The past segments a meter's server cell keeps for getAt.
+local function history(state: any, player: Player?): { any }?
+	local cell = if player then state.players[Store.SERVER][player] else state.global[Store.SERVER]
+	local aux = cell and cell.aux
+	return aux and aux.history
+end
+
+local function fails(fn: (...any) -> ...any, text: string)
+	local ok, err = pcall(fn)
+	check.equal(ok, false)
+	if not string.find(tostring(err), text, 1, true) then
+		error(`expected an error with "{text}", got {err}`, 2)
+	end
+	check.not_nil((string.find(tostring(err), "[HYDROGEN]", 1, true)))
 end
 
 local function near(actual: number, expected: number)
@@ -580,17 +609,229 @@ return function()
 			return nil
 		end)
 
+		test.case("getAt reads the segment in force at a past server time", function()
+			Hydrogen.test({ players = { "Alice" }, clock = { serverNow = 1000 } }, function(t, alice)
+				local Mana = defs.Mana
+				Mana:set(alice, 20)
+				Mana:setRate(alice, 10) -- same instant: one segment from 1000
+				t:advance(0.5)
+				Mana:add(alice, -10) -- 25 -> 15 at 1000.5
+				t:advance(0.5)
+				Mana:setRate(alice, -20) -- from 20 at 1001
+				t:advance(0.25)
+				near(Mana:get(alice), 15)
+
+				near(Mana:getAt(alice, 1000.25) :: number, 22.5)
+				near(Mana:getAt(alice, 1000.5) :: number, 15) -- a write's own time reads the new segment
+				near(Mana:getAt(alice, 1000.75) :: number, 17.5)
+				near(Mana:getAt(alice, 1001.1) :: number, 18)
+				near(Mana:getAt(alice, 1001.25) :: number, 15)
+				-- Before the first write: the initial value, at rest.
+				check.equal(Mana:getAt(alice, 999.8), 0)
+				-- More than history (1.5 s) ago: nil, whatever is kept.
+				check.equal(Mana:getAt(alice, 999.7), nil)
+
+				-- setRange clamps from its own time on; before it, the old range held.
+				Mana:set(alice, 90)
+				Mana:setRate(alice, 0)
+				t:advance(0.5)
+				Mana:setRange(alice, 0, 50)
+				check.equal(Mana:get(alice), 50)
+				check.equal(Mana:getAt(alice, 1001.5), 90)
+				check.equal(Mana:getAt(alice, 1001.75), 50)
+				-- sync sends again but changes nothing, so the past reads the same.
+				Mana:sync(alice)
+				check.equal(Mana:getAt(alice, 1001.5), 90)
+				check.equal(Mana:getAt(alice, 1001.75), 50)
+			end)
+			return nil
+		end)
+
+		test.case("getAt clamps mid-segment and extrapolates a stamp a little in the future", function()
+			Hydrogen.test({ players = { "Alice" }, clock = { serverNow = 1000 } }, function(t, alice)
+				local Charge = defs.Charge
+				Charge:set(8)
+				Charge:setRate(2) -- full at 1001
+				t:advance(1.5)
+				Charge:setRate(-1)
+				t:advance(0.5)
+				near(Charge:get(), 9.5)
+
+				near(Charge:getAt(1000.5) :: number, 9)
+				check.equal(Charge:getAt(1001.25), 10) -- clamped at max inside the segment
+				check.equal(Charge:getAt(1001.5), 10)
+				-- Ahead of the server's clock (Guards.timestamp allows 0.05 s): the current segment
+				-- extrapolated, clamped like get().
+				near(Charge:getAt(1002.05) :: number, 9.45)
+				check.equal(Charge:getAt(1002 + 60), 0)
+				-- history = 2: 1000 is the oldest time it answers for.
+				check.equal(Charge:getAt(1000), 8)
+				check.equal(Charge:getAt(999.99), nil)
+
+				-- The server only: a client has no past to read.
+				fails(function()
+					t:as(alice, function()
+						Charge:getAt(1001)
+					end)
+				end, "getAt reads the server's past values and runs on the server only")
+			end)
+			return nil
+		end)
+
+		test.case("history is pruned by time on writes, with a hard cap", function()
+			Hydrogen.test({ players = { "Alice" }, clock = { serverNow = 1000 } }, function(t, alice)
+				local Mana, Stamina = defs.Mana, defs.Stamina
+				-- A write every frame for 5 seconds keeps about history (1.5 s) of segments.
+				for frame = 1, 300 do
+					Mana:setRate(alice, if frame % 2 == 0 then 1 else -1)
+					t:advance(1 / 60)
+				end
+				local kept = #(history(Mana, alice) :: { any })
+				check.is_true(kept >= 89 and kept <= 92)
+				local now = Clock.serverNow()
+				check.not_nil(Mana:getAt(alice, now - 1.45))
+				check.equal(Mana:getAt(alice, now - 1.55), nil)
+
+				-- Writes at one instant replace each other: nothing to keep for a segment never in force.
+				Mana:set(alice, 1)
+				local before = #(history(Mana, alice) :: { any })
+				for index = 2, 50 do
+					Mana:set(alice, index)
+				end
+				check.equal(#(history(Mana, alice) :: { any }), before)
+				check.equal(Mana:getAt(alice, Clock.serverNow()), 50)
+
+				-- Hundreds of writes inside the window: capped at 128, and the dropped time reads nil.
+				for index = 1, 400 do
+					Mana:set(alice, index % 100)
+					t:advance(0.001)
+				end
+				local past = history(Mana, alice) :: { any }
+				check.equal(#past, 128)
+				now = Clock.serverNow()
+				check.equal(Mana:getAt(alice, past[1].at - 0.0005), nil)
+				check.not_nil(Mana:getAt(alice, past[1].at))
+				check.not_nil(Mana:getAt(alice, now - 0.05))
+
+				-- A meter without the option keeps nothing.
+				Stamina:set(alice, 10)
+				t:advance(0.1)
+				Stamina:set(alice, 20)
+				check.equal(history(Stamina, alice), nil)
+			end)
+			return nil
+		end)
+
+		test.case("a player leaving drops their meter's past", function()
+			Hydrogen.test({ players = { "Alice" }, clock = { serverNow = 1000 } }, function(t, alice)
+				local Mana = defs.Mana
+				Mana:set(alice, 50)
+				Mana:setRate(alice, 10)
+				t:advance(0.5)
+				Mana:setRate(alice, 0)
+				t:advance(0.5)
+				near(Mana:getAt(alice, 1000.25) :: number, 52.5)
+
+				t:leave(alice)
+				check.equal(history(Mana, alice), nil)
+				check.equal(Mana:getAt(alice, 1000.25), nil)
+				-- The current segment stays readable for playerRemoving hooks.
+				check.equal(Mana:getAt(alice, 1001), 55)
+				-- Writes after leaving keep nothing.
+				Mana:set(alice, 10)
+				t:advance(0.5)
+				Mana:set(alice, 20)
+				check.equal(history(Mana, alice), nil)
+			end)
+			return nil
+		end)
+
+		test.case("the spell-window recipe judges a cast at the moment it was made", function()
+			local Mana, Cast = defs.Fulgur, defs.CastFulgur
+			local verdicts: { string } = {}
+			local Spells = Hydrogen.define("MeterRecipeSpells", function()
+				local Spells = {}
+				local spentAt: { [Player]: number } = setmetatable({}, { __mode = "k" }) :: any
+
+				function Spells:init()
+					-- Drops stamps older than ping (capped at 1 s) + 0.2 s, or from the future.
+					Cast:Use(Guards.timestamp())
+					Cast:On(function(player: Player, castAt: number)
+						if castAt < (spentAt[player] or -math.huge) then
+							table.insert(verdicts, "refused: before the last cast was paid")
+							return
+						end
+						local mana = Mana:getAt(player, castAt)
+						local seen = `at {string.format("%.1f", mana or -1)} (now {string.format("%.1f", Mana:get(player))})`
+						if mana == nil or mana < 85 or mana > 95 then
+							table.insert(verdicts, `refused {seen}`)
+							Mana:sync(player)
+							return
+						end
+						table.insert(verdicts, `cast {seen}`)
+						Mana:add(player, -40)
+						spentAt[player] = Clock.serverNow()
+					end)
+				end
+
+				return Spells
+			end)
+
+			Guards.configure({
+				ping = function(_player: Player): number?
+					return 0.3
+				end,
+			})
+			Hydrogen.test({ systems = { Spells }, players = { "Alice" }, clock = { serverNow = 1000 } }, function(t, alice)
+				Mana:set(alice, 80)
+				Mana:setRate(alice, 10)
+				t:advance(0)
+				t:advance(1.6) -- the server is at 96: outside 85-95, so get() would refuse
+
+				-- Alice's view is 0.3 s behind (her ping): she sees 93 and casts.
+				clock(t):setServerOffset(-0.3, alice)
+				t:as(alice, function()
+					near(Mana:get(alice), 93)
+					Cast:Fire(Clock.serverNow())
+				end)
+				t:advance(0)
+				check.equal(#verdicts, 1)
+				check.equal(verdicts[1], "cast at 93.0 (now 96.0)")
+				near(Mana:get(alice), 56)
+
+				-- A second cast stamped before the first was paid for would read the mana it spent
+				-- (getAt(1001.35) is 93.5): the recipe refuses it.
+				clock(t):setServerOffset(-0.25, alice)
+				t:as(alice, function()
+					Cast:Fire(Clock.serverNow())
+				end)
+				t:advance(0)
+				check.equal(verdicts[2], "refused: before the last cast was paid")
+				near(Mana:getAt(alice, 1001.35) :: number, 93.5)
+
+				-- A stamp backdated past ping + tolerance never reaches the handler.
+				clock(t):setServerOffset(-1, alice)
+				t:as(alice, function()
+					Cast:Fire(Clock.serverNow())
+				end)
+				t:advance(0)
+				check.equal(#verdicts, 2)
+
+				-- Out of the window at the stamp: refused, and the client corrected.
+				clock(t):setServerOffset(0, alice)
+				t:as(alice, function()
+					Cast:Fire(Clock.serverNow())
+				end)
+				t:advance(0)
+				check.equal(verdicts[3], "refused at 56.0 (now 56.0)")
+			end)
+			Guards.resetConfiguration()
+			return nil
+		end)
+
 		test.case("bad writes and definitions error with a fix", function()
 			Hydrogen.test({ players = { "Alice" } }, function(_t, alice)
-				local Stamina, Heat = defs.Stamina, defs.Heat
-				local function fails(fn: (...any) -> ...any, text: string)
-					local ok, err = pcall(fn)
-					check.equal(ok, false)
-					if not string.find(tostring(err), text, 1, true) then
-						error(`expected an error with "{text}", got {err}`, 2)
-					end
-					check.not_nil((string.find(tostring(err), "[HYDROGEN]", 1, true)))
-				end
+				local Stamina, Heat, Mana = defs.Stamina, defs.Heat, defs.Mana
 
 				fails(function()
 					Stamina:set(alice, 0 / 0)
@@ -607,6 +848,26 @@ return function()
 				fails(function()
 					(Stamina :: any):set(5)
 				end, "pass the player first")
+				fails(function()
+					Stamina:getAt(alice, Clock.serverNow())
+				end, `getAt needs history in the meter options, e.g. State.playerMeter("MeterStamina", \{ max = 100, history = 1.5 })`)
+				fails(function()
+					Heat:getAt(Clock.serverNow())
+				end, `State.meter("MeterHeat"`)
+				fails(function()
+					Mana:getAt(alice, 0 / 0)
+				end, "getAt expects a server time (a finite number from Clock.serverNow()), got NaN")
+				fails(function()
+					Mana:getAt(alice, "now" :: any)
+				end, "got string")
+				fails(function()
+					(Mana :: any):getAt(Clock.serverNow())
+				end, "pass the player first")
+				local okAt, errAt = pcall(function()
+					Mana:getAt(alice, math.huge)
+				end)
+				check.equal(okAt, false)
+				check.not_nil((string.find(tostring(errAt), "test.Meter:%d")))
 
 				local ok, err = pcall(function()
 					Stamina:setRate(alice, 0 / 0)
@@ -650,6 +911,15 @@ return function()
 			rejects(function()
 				State.meter("MeterVisible", { max = 10, visibleTo = "everyone" } :: any)
 			end, "visibleTo only applies to per-player state")
+			rejects(function()
+				State.meter("MeterHistoryZero", { max = 10, history = 0 })
+			end, "history must be a positive number of seconds, e.g. history = 1.5, got 0")
+			rejects(function()
+				State.playerMeter("MeterHistoryNaN", { max = 10, history = 0 / 0 })
+			end, "history must be a positive number of seconds, e.g. history = 1.5, got NaN")
+			rejects(function()
+				State.meter("MeterHistoryString", { max = 10, history = "1" :: any })
+			end, "got string")
 			return nil
 		end)
 
