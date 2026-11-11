@@ -42,6 +42,37 @@ end
 
 return function()
 	test.suite("Character", function()
+		test.case("fake characters have Roblox's Humanoid defaults and a readable root position", function()
+			Hydrogen.test({ players = 1 }, function(t, alice)
+				local character = t:spawnCharacter(alice)
+				local humanoid = character:FindFirstChildOfClass("Humanoid") :: Humanoid
+				check.equal(humanoid.Health, 100)
+				check.equal(humanoid.MaxHealth, 100)
+				check.equal(Hydrogen.Guards.distance(alice, Vector3.new(0, 0, 5)), 5)
+			end)
+			return nil
+		end)
+
+		-- create_hydrogen's test runtime makes workspace a stand-in table (Serenity's T3).
+		test.case("spawnCharacter and streamCharacter work when workspace isn't an Instance", function()
+			-- Modules read globals through a shared table, so the stand-in goes there.
+			local globals = getfenv(0) :: any
+			local real = globals.workspace
+			globals.workspace = { Name = "Workspace" }
+			local ok, err = pcall(function()
+				Hydrogen.test({ players = 1 }, function(t, alice)
+					local character = t:spawnCharacter(alice)
+					check.equal(alice.Character, character)
+					check.equal(character.Parent, nil)
+					t:streamCharacter(alice, false)
+					t:streamCharacter(alice, true)
+				end)
+			end)
+			globals.workspace = real
+			assert(ok, err)
+			return nil
+		end)
+
 		test.case("character hooks run in dependency order, removal in reverse", function()
 			local events = {}
 			local Data = recorder(events, "Data")

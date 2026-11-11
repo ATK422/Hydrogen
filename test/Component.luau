@@ -656,6 +656,23 @@ return function()
 			return nil
 		end)
 
+		-- Defined here, the calling module is test/Component.luau ("Component").
+		test.case("components are named after their module, so two on one tag differ", function()
+			local tag = newTag()
+			local first = Component.new(tag, { construct = function() end })
+			local second = Component.new(tag, { construct = function() end }, { id = "CombatantVfx" })
+			local third = Component.new(tag, function()
+				return { construct = function() end }
+			end, { id = "MarkerSounds" })
+			check.equal(first.id, `Component ({tag} component)`)
+			check.equal(second.id, "CombatantVfx")
+			check.equal(third.id, "MarkerSounds")
+			-- A module named after its tag keeps the short name.
+			check.equal(Component.new("Component", { construct = function() end }).id, "Component component")
+			check.is_false(pcall(Component.new, tag, { construct = function() end }, { id = 5 } :: any))
+			return nil
+		end)
+
 		test.case("bad options fail at definition with a clear message", function()
 			local function message(fn: () -> ()): string
 				local ok, err = pcall(fn)
@@ -672,7 +689,7 @@ return function()
 			end), "Component.new needs a tag")
 			has(message(function()
 				Component.new("X", {} :: any)
-			end), "X component needs a construct function")
+			end), "Component (X component) needs a construct function")
 			has(message(function()
 				Component.new("X", { ancestors = { "Workspace" } :: any, construct = function() end })
 			end), "ancestors must be a list of Instances")
@@ -689,7 +706,7 @@ return function()
 				Component.new("X", function()
 					return {} :: any
 				end)
-			end), "X component needs a construct function")
+			end), "Component (X component) needs a construct function")
 			return nil
 		end)
 	end)

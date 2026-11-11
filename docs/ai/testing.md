@@ -429,6 +429,21 @@ it("buys", function()
 end)
 ```
 
+### Lune differs from Roblox
+
+Lune's Instances are close to Roblox's but not the same, and the error is often only "error in error handling". Hydrogen's Lune runtime and `create_hydrogen`'s `test/Roblox.luau` smooth what they can; the rest you write around:
+
+| In Lune | Do this in code tests touch |
+| --- | --- |
+| `CFrame.lookAt` faces the wrong way for targets with a Z component, NaN looking straight down | Fixed by both runtimes (they install a correct `CFrame.lookAt`). Elsewhere build orientations with `CFrame.Angles` or `CFrame.fromMatrix` |
+| A `Part`'s `Position` and `CFrame` are separate; `Position` can't be read until it is set ("missing default value") | Set and read `part.CFrame` (`part.CFrame.Position`). In Roblox they are the same value |
+| `Humanoid.Health` has no default | Fake characters from `t:spawnCharacter` set `Health` and `MaxHealth` to 100; set both on Humanoids you build |
+| No `WaitForChild` on real Instances | `instance:FindFirstChild(name) or instance:WaitForChild(name)` |
+| No `Model:GetPivot()`, no `Attachment.WorldPosition` | Use `model.PrimaryPart.CFrame`, and `part.CFrame * attachment.CFrame` (Guards range checks already do) |
+| Setting an `Attachment`'s `Position` doesn't update its `CFrame` (and serialized models keep only `CFrame`) | Set `attachment.CFrame` |
+| The same Instance can arrive as a different userdata: `a == b` is true, but it misses as a table key | Key tables by something stable (`instance:GetFullName()`, an id attribute), or compare with `==` |
+| Methods on a destroyed Instance error | Check `instance.Parent` (or track destruction) before calling methods in cleanup |
+
 ### Run game tests under Lune
 
 Under Lune, game code must use string requires (`require("../Network/Shop")`), or every ModuleScript it requires by Instance must be registered in `Lune.modules`. `ReplicatedStorage.roblox_packages.hydrogen` does not exist there. Require Hydrogen by path instead, e.g. `require("../roblox_packages/hydrogen")`.
@@ -456,6 +471,8 @@ Under Lune, `RunService:IsServer()` and `IsClient()` return false, Heartbeat nev
 
 ## Mistakes
 
+- Don't read `part.Position` in code tests run under Lune; it errors until set. Do use `part.CFrame.Position`, the same value in Roblox.
+- Don't key a table by an Instance you look up twice under Lune; the second lookup can be a different userdata. Do key by `GetFullName()` or an attribute, or compare with `==`.
 - Don't call `workspace:GetPartBoundsInBox`, `Raycast` or other spatial queries from the systems you test under Lune; they don't exist there. Do put them in one query system and `replace` it with a fake that returns what overlaps.
 
 - Don't call `app:stop()` and `net:close()` by hand around `Hydrogen.loopback()`. Do use `Hydrogen.test`, which can't forget to.

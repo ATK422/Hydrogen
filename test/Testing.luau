@@ -611,6 +611,20 @@ return function()
 	end)
 
 	test.suite("Lune runtime", function()
+		test.case("CFrame.lookAt faces its target, as in Roblox", function()
+			local function near(a: Vector3, b: Vector3)
+				check.is_true((a - b).Magnitude < 1e-5)
+			end
+			local from = Vector3.new(1, 1, 1)
+			for _, direction in { Vector3.new(0, 0, -1), Vector3.new(0, 0, 1), Vector3.new(3, 4, 5).Unit, Vector3.new(0, -1, 0), Vector3.new(1, 0, 0) } do
+				local cframe = CFrame.lookAt(from, from + direction * 10)
+				near(cframe.LookVector, direction)
+				near(cframe.Position, from)
+			end
+			check.equal(CFrame.new(1, 2, 3).Position, Vector3.new(1, 2, 3))
+			return nil
+		end)
+
 		test.case("script requires and inferred ids work as in Studio", function()
 			local Wallet = require("./Fixtures/Wallet") :: any
 			check.equal(Wallet.id, "Wallet")

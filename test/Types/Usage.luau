@@ -42,3 +42,31 @@ Played:FireAll("M2", 4)
 local Ask: Hydrogen.ClientFunction<(Move), (boolean)> =
 	Hydrogen.clientFunction("TypesAsk", gt.args(MoveSchema), gt.returns(gt.boolean())) :: any
 local _accepted: boolean = Ask:Fire("M1")
+
+-- Components: construct may return nothing (the instance is the object), an object, or be built
+-- by a constructor that gets `use`. Two on one tag, one named explicitly (T6).
+local Sounds = Hydrogen.Component.new("TypesCombatant", {
+	construct = function(_model: Model, _scope: Hydrogen.Scope) end,
+})
+local _model: Model? = Sounds:get(Instance.new("Model"))
+local Vfx = Hydrogen.Component.new("TypesCombatant", {
+	construct = function(_model: Model)
+		return { intensity = 1 }
+	end,
+	destroy = function(_vfx: { intensity: number }, _model: Model) end,
+}, { id = "CombatantVfx" })
+local vfx = Vfx:get(Instance.new("Model"))
+local _intensity: number = if vfx then vfx.intensity else 0
+local _Pads = Hydrogen.Component.new("TypesPad", {
+	attributes = gt.table({ Boost = gt.number() }),
+	construct = function(_pad: BasePart, _scope: Hydrogen.Scope, attributes)
+		local _boost: number = attributes.Boost
+	end,
+})
+local _Doors = Hydrogen.Component.new("TypesDoor", function(_use)
+	return {
+		construct = function(door: Model): Model
+			return door
+		end,
+	}
+end)

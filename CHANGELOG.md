@@ -10,6 +10,14 @@ All notable changes to Hydrogen are listed here. Versions follow [Semantic Versi
   - `app:start()` and `app:stop()` in the generated `Main` scripts no longer fail with "Expected this to be exactly ... but got 'App'". Every `App` method now names its `self` type, instead of each method inferring a slightly different one.
   - Fields declared with the `read` modifier (`scope.alive`, `scope.name`, `timer.active`, `connection.Connected`, `component.tag`, `config.values`, and others) are visible again. That luau-lsp can't parse `read`, so it reported "Key not found". The modifier is gone from every public type; the fields are still read-only by contract.
   - Literal unions: `network.md` and the README show how to keep `"M1" | "M2"` instead of `string` in handlers (annotate the network object, cast the constructor). GreenTea's generic signatures can't keep them on their own.
+- Under Lune (Serenity's T3 and T4):
+  - `t:spawnCharacter` works in `create_hydrogen`'s test runtime, whose `workspace` is a stand-in table: the fake character stays unparented there instead of failing with "error converting Lua table to userdata". `t:streamCharacter` likewise.
+  - Fake characters' `Humanoid` has `Health` and `MaxHealth` 100, as in Roblox; Lune gives `Health` no default.
+  - Hydrogen's Lune runtime and the generated `test/Roblox.luau` install a correct `CFrame.lookAt`. Lune's faces the wrong way for any target with a Z component, and returns NaN looking straight down.
+  - Guards range checks read parts' `CFrame` (the same value as `Position` in Roblox), so they work on fake characters, and fall back to `PrimaryPart` and the parent part where Lune has no `Model:GetPivot` or `Attachment.WorldPosition`.
+  - `testing.md` and the README list the Lune differences that remain, with what to do instead.
+- Strict mode: a `Component.new` options table whose `construct` returns nothing type-checks (it failed with "Not all codepaths in this function return 'T'"). New types `Hydrogen.ComponentPlainOptions<I, A>` and `Hydrogen.ComponentIdentity`.
+- Components on the same tag no longer share a system id (T6). The id is `"<tag> component"` when the defining module is named after the tag, else `"<Module> (<tag> component)"`, and `Component.new(tag, options, { id = "..." })` sets it.
 - CI type-checks `test/Types/`, strict game code calling Hydrogen, with that luau-lsp version, so these can't come back.
 
 ## 0.5.3
