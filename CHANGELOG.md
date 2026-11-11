@@ -2,6 +2,12 @@
 
 All notable changes to Hydrogen are listed here. Versions follow [Semantic Versioning](https://semver.org); while the version is `0.x`, a minor bump can contain breaking changes.
 
+## 0.5.3
+
+### Fixed
+
+- `Hydrogen.Component` no longer errors in `start` in a live game. The signal source read a `root` field on the real `CollectionService`, which throws ("root is not a valid member of CollectionService") and stopped the whole app's boot on server and client. Tests used a table stand-in, so they never hit it; a new test uses a real Instance.
+
 ## 0.5.2
 
 ### Added

@@ -695,6 +695,19 @@ return function()
 	end)
 
 	test.suite("Component with CollectionService signals", function()
+		-- A real CollectionService is an Instance, which errors on members it doesn't have.
+		test.case("the signal source accepts a real Instance as the service", function()
+			local Source = require("../src/Component/Source")
+			local service = game:GetService("CollectionService")
+			check.equal(typeof(service), "Instance")
+			check.is_false(pcall(function()
+				return (service :: any).root
+			end))
+			local source = Source.signals(service)
+			check.equal(source.root, game)
+			return nil
+		end)
+
 		-- frktest hooks run around every test, so each case installs the world itself.
 		local function useWorld(): any
 			local world = FakeWorld()

@@ -85,7 +85,9 @@ function Source.signals(service: any?): Source
 	end
 
 	return {
-		root = if service.root then service.root else game,
+		-- A real CollectionService is an Instance and errors on members it lacks, so only a test
+		-- stand-in (a table) is asked for its own DataModel.
+		root = if typeof(service) ~= "Instance" and service.root then service.root else game,
 		tagged = function(tag: string): { Instance }
 			return service:GetTagged(tag)
 		end,
