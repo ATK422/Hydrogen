@@ -91,6 +91,11 @@ local App = {
 	_output = print :: (message: string) -> (),
 }
 
+-- Every method names its self type. Inferred self types differ per method (one sees
+-- `detach = nil`, another `_subjects` only), and strict game code calling app:start() or
+-- app:stop() then fails to type-check against the App type it holds.
+type App = typeof(App)
+
 -- A ModuleScript counts as well as its descendants, so a single module can be passed directly.
 local function modulesIn(container: Instance): { ModuleScript }
 	local modules = {}
@@ -186,7 +191,7 @@ function App.new(options: AppOptions?): typeof(App)
 	return app
 end
 
-function App:addSystem(system: System)
+function App.addSystem(self: App, system: System)
 	if self._started then
 		if table.find(self._systems, system) then
 			return
@@ -226,7 +231,7 @@ function App:addSystem(system: System)
 end
 
 -- A system added after start gets the added hooks for what's already in: a player, then their character.
-function App:_catchUp(system: System, state: Subject, children: { Subject })
+function App._catchUp(self: App, system: System, state: Subject, children: { Subject })
 	runHook(system, state.hooks.added, table.unpack(state.args))
 	for _, child in children do
 		if not child.removing then
@@ -236,26 +241,26 @@ function App:_catchUp(system: System, state: Subject, children: { Subject })
 end
 
 -- Debug output, for what the app decided on its own.
-function App:_note(message: string)
+function App._note(self: App, message: string)
 	if self._debug then
 		self._output(`[HYDROGEN] {message}`)
 	end
 end
 
-function App:addSystems(systems: { System })
+function App.addSystems(self: App, systems: { System })
 	for _, system in systems do
 		self:addSystem(system)
 	end
 end
 
-function App:addSystemsFolders(...: Instance)
+function App.addSystemsFolders(self: App, ...: Instance)
 	for _, container in { ... } do
 		local systems = collectSystems(container)
 		self:addSystems(systems)
 	end
 end
 
-function App:addNetwork(...: Instance)
+function App.addNetwork(self: App, ...: Instance)
 	for _, container in { ... } do
 		local found = 0
 		for _, module in modulesIn(container) do
@@ -272,7 +277,7 @@ end
 -- Swaps a system for a fake until app:stop(). The fake's hooks run in the original's place
 -- in the order, and the original forwards every field to the fake, so dependents that
 -- already hold it call the fake. The original is added to the app if it wasn't.
-function App:replace(original: System, fake: { [any]: any })
+function App.replace(self: App, original: System, fake: { [any]: any })
 	if self._started then
 		error(`[HYDROGEN] replace must be called before app:start()`, 2)
 	end
@@ -289,7 +294,7 @@ function App:replace(original: System, fake: { [any]: any })
 	self._replacements[original] = fake :: any
 end
 
-function App:start()
+function App.start(self: App)
 	self._started = true
 
 	-- A failed boot must not leave the originals pointing at this app's fakes, or leave
@@ -306,7 +311,7 @@ function App:start()
 	end
 end
 
-function App:_boot()
+function App._boot(self: App)
 	self:_addDependencies()
 
 	self._ordered = {}
@@ -353,7 +358,7 @@ end
 
 -- A system that's used but wasn't added would run without its init and start, so it's added.
 -- A replaced system's dependencies aren't: the fake stands in for it.
-function App:_addDependencies()
+function App._addDependencies(self: App)
 	local included: { [System]: boolean } = {}
 	for _, system in self._systems do
 		included[system] = true
@@ -376,7 +381,7 @@ function App:_addDependencies()
 end
 
 -- Hook pairs cost nothing until a system defines one of their hooks.
-function App:_attachHooks()
+function App._attachHooks(self: App)
 	for _, hooks in Definition.registeredHooks() do
 		local attached = false
 		for _, entry in self._attached do
@@ -415,7 +420,7 @@ function App:_attachHooks()
 	end
 end
 
-function App:_defines(hooks: Hooks): boolean
+function App._defines(self: App, hooks: Hooks): boolean
 	for _, system in self._ordered do
 		if (system :: any)[hooks.added] ~= nil or (system :: any)[hooks.removing] ~= nil then
 			return true
@@ -424,7 +429,7 @@ function App:_defines(hooks: Hooks): boolean
 	return false
 end
 
-function App:_feed(hooks: Hooks): Feed
+function App._feed(self: App, hooks: Hooks): Feed
 	local app = self
 	local feed = {} :: Feed
 
@@ -458,7 +463,7 @@ function App:_feed(hooks: Hooks): Feed
 	return feed
 end
 
-function App:_watchPlayer(entry: Attached, state: Subject)
+function App._watchPlayer(self: App, entry: Attached, state: Subject)
 	local ok, cleanup = xpcall(entry.hooks.player :: any, debug.traceback, entry.feed, state.value)
 	if not ok then
 		Log.warn(`[HYDROGEN] Couldn't watch {nameOf(state.value)} for {entry.hooks.added}: {cleanup}`)
@@ -469,9 +474,11 @@ function App:_watchPlayer(entry: Attached, state: Subject)
 	end
 end
 
-function App:_detachHooks()
+function App._detachHooks(self: App)
 	for index = #self._attached, 1, -1 do
-		local entry = self._attached[index]
+		-- Annotated, so assigning nil doesn't narrow the inferred self type (detach: nil) and make
+		-- app:start() fail to type-check in strict game code.
+		local entry: Attached = self._attached[index]
 		local detach = entry.detach
 		entry.detach = nil
 		if detach then
@@ -483,7 +490,7 @@ function App:_detachHooks()
 	end
 end
 
-function App:_redirect()
+function App._redirect(self: App)
 	for original, fake in self._replacements do
 		local ok, err = pcall(Definition.redirect, original, fake)
 		if not ok then
@@ -494,7 +501,7 @@ function App:_redirect()
 	end
 end
 
-function App:_restore()
+function App._restore(self: App)
 	for _, original in self._redirected do
 		Definition.restore(original)
 	end
@@ -502,7 +509,7 @@ function App:_restore()
 end
 
 -- Slowest systems first, so the ones worth looking at are at the top.
-function App:_printTimings(total: number, network: number, initTimes: { [System]: number }, startTimes: { [System]: number })
+function App._printTimings(self: App, total: number, network: number, initTimes: { [System]: number }, startTimes: { [System]: number })
 	local systems = table.clone(self._ordered)
 	table.sort(systems, function(a, b)
 		return initTimes[a] + startTimes[a] > initTimes[b] + startTimes[b]
@@ -519,7 +526,7 @@ end
 -- for all of those hooks to finish, then runs stop hooks in reverse dependency order
 -- (destroying each system's scope right after its hook) and undoes replace.
 -- On the server this is bound to game:BindToClose.
-function App:stop()
+function App.stop(self: App)
 	if self._stopped then
 		return
 	end
@@ -553,7 +560,7 @@ end
 
 -- Scope.of for this app's systems. Originals resolve to the fake standing in for them.
 -- Without hooks, a subject is looked up as a player first, then in each hook pair.
-function App:_scopeOf(system: any, subject: any?, hooks: Hooks?): (Scope?, string?)
+function App._scopeOf(self: App, system: any, subject: any?, hooks: Hooks?): (Scope?, string?)
 	system = self._replacements[system] or system
 	if subject == nil then
 		return self:_systemScope(system)
@@ -561,7 +568,7 @@ function App:_scopeOf(system: any, subject: any?, hooks: Hooks?): (Scope?, strin
 	return self:_subjectScope(system, subject, hooks)
 end
 
-function App:_systemScope(system: System): Scope
+function App._systemScope(self: App, system: System): Scope
 	local scope = self._scopes[system]
 	if scope == nil then
 		scope = Scope.new(Definition.describe(system))
@@ -571,7 +578,7 @@ function App:_systemScope(system: System): Scope
 end
 
 -- After the system's stop hook, or when the boot fails. Scope.of then hands out a closed scope.
-function App:_closeSystemScope(system: System)
+function App._closeSystemScope(self: App, system: System)
 	local scope = self._scopes[system]
 	if scope then
 		scope:destroy()
@@ -581,7 +588,7 @@ function App:_closeSystemScope(system: System)
 end
 
 -- Open from the subject's first added hook until this system's removing hook for it returns.
-function App:_subjectScope(system: System, subject: any, hooks: Hooks?): (Scope?, string?)
+function App._subjectScope(self: App, system: System, subject: any, hooks: Hooks?): (Scope?, string?)
 	local state = if hooks then self:_statesOf(hooks)[subject] else self:_find(subject)
 	if state == nil then
 		if self:_departedFrom(subject, hooks) or self._stopped then
@@ -618,7 +625,7 @@ function App:_subjectScope(system: System, subject: any, hooks: Hooks?): (Scope?
 end
 
 -- Players and shutdown only exist in a running game or under loopback; the tests call the hooks directly otherwise.
-function App:_listen()
+function App._listen(self: App)
 	local loopback = Network.activeLoopback()
 	if loopback then
 		loopback:watch(function(player)
@@ -685,7 +692,7 @@ local function waitUntil(state: Subject, done: (Subject) -> boolean)
 end
 
 -- The subjects of one hook pair, keyed by subject.
-function App:_statesOf(hooks: Hooks): { [any]: Subject }
+function App._statesOf(self: App, hooks: Hooks): { [any]: Subject }
 	local states = self._subjects[hooks]
 	if states == nil then
 		states = {}
@@ -695,7 +702,7 @@ function App:_statesOf(hooks: Hooks): { [any]: Subject }
 end
 
 -- Every subject of every hook pair.
-function App:_all(): { Subject }
+function App._all(self: App): { Subject }
 	local list = {}
 	for _, states in self._subjects do
 		for _, state in states do
@@ -706,7 +713,7 @@ function App:_all(): { Subject }
 end
 
 -- A player first, then the subject of each hook pair in the order they attached.
-function App:_find(value: any): Subject?
+function App._find(self: App, value: any): Subject?
 	local state = self:_statesOf(PLAYER)[value]
 	if state then
 		return state
@@ -720,7 +727,7 @@ function App:_find(value: any): Subject?
 	return nil
 end
 
-function App:_departedFrom(value: any, hooks: Hooks?): boolean
+function App._departedFrom(self: App, value: any, hooks: Hooks?): boolean
 	if hooks then
 		local departed = self._departed[hooks]
 		return departed ~= nil and departed[value] == true
@@ -733,11 +740,11 @@ function App:_departedFrom(value: any, hooks: Hooks?): boolean
 	return false
 end
 
-function App:_addPlayer(player: Player)
+function App._addPlayer(self: App, player: Player)
 	self:_enter(PLAYER, player, { player }, nil)
 end
 
-function App:_removePlayer(player: Player)
+function App._removePlayer(self: App, player: Player)
 	local state = self:_statesOf(PLAYER)[player]
 	if state then
 		self:_leave(state)
@@ -746,7 +753,7 @@ end
 
 -- Calls the added hook on each system in dependency order, one after another, in this thread.
 -- A subject with a parent waits for the parent's added hooks first.
-function App:_enter(hooks: Hooks, value: any, args: { any }, parentValue: any?): boolean
+function App._enter(self: App, hooks: Hooks, value: any, args: { any }, parentValue: any?): boolean
 	local states = self:_statesOf(hooks)
 	if self._stopped or states[value] then
 		return false
@@ -824,7 +831,7 @@ end
 -- have finished and the subject's children are removed. Each system's scope for the subject
 -- is destroyed right after its hook. Returns once the subject is fully removed, also when
 -- another thread got there first.
-function App:_leave(state: Subject)
+function App._leave(self: App, state: Subject)
 	if state.removed then
 		return
 	end

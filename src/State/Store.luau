@@ -55,6 +55,8 @@ export type Kind = {
 	join: ((state: Def, player: Player) -> ())?,
 	-- Optional: a cell is being dropped, to stop anything it scheduled.
 	discard: ((cell: Cell) -> ())?,
+	-- Server, optional: a player left (their server cells stay readable).
+	leave: ((state: Def, player: Player) -> ())?,
 }
 
 export type Def = Source & {
@@ -394,6 +396,11 @@ local function gone(player: Player): boolean
 	return departed[player] == true or Runtime:isDeparted(player)
 end
 
+-- Server: whether a player has left, so a kind can stop keeping anything for them.
+function Store.departed(player: Player): boolean
+	return gone(player)
+end
+
 -- A player starts receiving state: first everything already written that they may see, then changes.
 local function subscribe(player: Player)
 	if subscribed[player] or gone(player) then
@@ -445,6 +452,12 @@ end
 
 local function unsubscribe(player: Player)
 	departed[player] = true
+	for _, state in Store.states do
+		local leave = state.kind.leave
+		if leave then
+			leave(state, player)
+		end
+	end
 	if subscribed[player] then
 		subscribed[player] = nil
 		local index = table.find(subscribers, player)

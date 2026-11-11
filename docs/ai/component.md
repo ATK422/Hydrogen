@@ -84,10 +84,13 @@ Tag a part `Coin`, give it a number attribute `Value`, put it in Workspace: each
 Constructor (`Hydrogen.Component.new`), called at module top level:
 
 ```luau
-Hydrogen.Component.new<I, A, T>(tag: string, options: Hydrogen.ComponentOptions<I, A, T>): Hydrogen.Defined<Hydrogen.Component<I, T>>
-Hydrogen.Component.new<I, A, T>(tag: string, constructor: (use) -> Hydrogen.ComponentOptions<I, A, T>): Hydrogen.Defined<Hydrogen.Component<I, T>>
--- The result is a system with id "<tag> component". Add it to the app (addSystem / addSystemsFolders) on
--- every side where it should run. The constructor form gets `use`, as in Hydrogen.define.
+Hydrogen.Component.new<I, A>(tag: string, options: Hydrogen.ComponentPlainOptions<I, A>, identity: Hydrogen.ComponentIdentity?): Hydrogen.Defined<Hydrogen.Component<I, I>>  -- construct returns nothing
+Hydrogen.Component.new<I, A, T>(tag: string, options: Hydrogen.ComponentOptions<I, A, T>, identity: Hydrogen.ComponentIdentity?): Hydrogen.Defined<Hydrogen.Component<I, T>>
+Hydrogen.Component.new<I, A, T>(tag: string, constructor: (use) -> Hydrogen.ComponentOptions<I, A, T>, identity: { id: string? }?): Hydrogen.Defined<Hydrogen.Component<I, T>>
+-- The result is a system. Its id, used in every [HYDROGEN] message about it, is identity.id if given,
+-- else "<tag> component" when the calling module is named after the tag (Coin.luau, tag "Coin"),
+-- else "<Module> (<tag> component)". Add it to the app (addSystem / addSystemsFolders) on every side
+-- where it should run. The constructor form gets `use`, as in Hydrogen.define.
 ```
 
 Options (`Hydrogen.ComponentOptions<I, A, T>`):
@@ -127,6 +130,8 @@ Before the component's `start` and after its `stop`, `get`/`wait` return nil and
 - **Streaming.** On a StreamingEnabled client, streaming out parents the instance to nil, so the object is destroyed, and streaming back in constructs a new one. A part that streams in and out ten times gets ten `construct` calls. Keep state that must survive on the server or in attributes, not in the object. For models with required children, set `ModelStreamingMode` to `Atomic` or `Persistent`, or partial streaming destroys and reconstructs the object as children come and go.
 - **`construct` runs in its own thread.** It may yield (a `WaitForChild`, a load). `get` returns nil until it returns. If the instance stops qualifying first, the scope is destroyed, which cancels the yielding thread, and `destroy` is not called. Whatever was added to the scope is cleaned up.
 - **The return value is the object.** Return a table (fields, methods) or any value. If `construct` returns nothing, the instance itself is the object, so `get`, `has` and `all` still work.
+- **Strict types:** with the options table, `construct` may return nothing (the instance is then its object, and `get` returns the instance type) or an object. With the constructor form (`Component.new(tag, function(use) return { ... } end)`), `construct` must return something; return the instance (`construct = function(door: Model): Model return door end`) when there's no object. Luau can't infer `use` when two overloads take a function.
+- **Names:** two components on one tag (sounds and effects on `Combatant`) get different ids from their modules: `MarkerSounds (Combatant component)` and `CombatantVfx (Combatant component)`. Called through your own wrapper, the inferred module is the wrapper's, so pass `{ id = "..." }`.
 - **Errors are contained.** An error in `construct` is warned with the instance's full name and traceback. Its scope is cleaned, and every other instance and component carries on. It is not retried until the instance stops qualifying and qualifies again (retagged, streamed back in, a child removed and re-added). An error in `destroy` is warned, and the scope is still destroyed.
 - **`destroy` is optional.** Put cleanup in the scope (`scope:connect`, `scope:add(clone)`, `scope:add(function() ... end)`). Use `destroy` for work that needs the object, such as saving its state. It must not yield.
 - **Attributes.** `construct` gets the attributes table after validation. While the object exists, Hydrogen updates **that same table in place** on every valid change, so read `attributes.Value` when you need it. A change that breaks the schema destroys the object with a warning, and it is constructed again once the attributes are valid. GreenTea tables accept extra attributes. For optional attributes use `gt.optional(...)`.
@@ -327,6 +332,7 @@ Replace the systems a component `use`s as usual (`replace = { [WalletSystem] = f
 | `<tag> component needs a construct function: construct = function(instance, scope) ... end` | No `construct` | Add it |
 | `<tag> component: destroy must be a function` | `destroy` isn't a function | Fix or remove it |
 | `<tag> component: ancestors must be a list of Instances, e.g. { workspace }` (or `got a <type>`) | Empty list, or not Instances (often strings) | Pass the Instances themselves: `{ workspace, workspace.Map }` |
+| `<tag> component: the third argument of Component.new is { id = "Name" }` | Third argument isn't a table, or `id` isn't a non-empty string | `Component.new(tag, options, { id = "CombatantVfx" })` |
 | `<tag> component: children must be a list of names or a table of names to classes` | Wrong `children` shape | `{ "Hitbox" }` or `{ Hitbox = "BasePart" }` |
 | `<tag> component: attributes must be a GreenTea schema, e.g. gt.table({ Value = gt.number() })` | Not a schema or a table of schemas | Use `Hydrogen.gt` |
 | `<tag> component: timeout must be a number of seconds` | Negative or not a number | Pass seconds |

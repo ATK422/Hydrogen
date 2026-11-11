@@ -35,9 +35,20 @@ export type Options<I, A, T> = {
 	destroy: ((object: T, instance: I) -> ())?,
 }
 
+-- Options whose construct returns nothing: the instance is its own object. A separate type so
+-- `construct = function(part) ... end` type-checks; a generic return can't be inferred from no values.
+export type PlainOptions<I, A> = {
+	ancestors: { Instance }?,
+	children: ({ string } | { [string]: string })?,
+	attributes: A?,
+	timeout: number?,
+	construct: (instance: I, scope: Scope, attributes: A) -> (),
+	destroy: ((object: I, instance: I) -> ())?,
+}
+
 export type Component<I, T> = {
 	-- The CollectionService tag.
-	read tag: string,
+	tag: string,
 	-- The instance's object, or nil if it isn't constructed (yet).
 	get: (self: Component<I, T>, instance: Instance) -> T?,
 	-- Whether the instance's object is constructed.
@@ -111,11 +122,34 @@ local function describe(instance: Instance): string
 	return if ok then name else tostring(instance)
 end
 
-local function validate(tag: any, options: any, level: number): Config
+export type Identity = {
+	-- The system id, also used in every [HYDROGEN] message about this component.
+	id: string?,
+}
+
+-- "<tag> component" when the defining module is named after the tag (Coin.luau for tag Coin),
+-- otherwise "<Module> (<tag> component)", so components sharing a tag can be told apart.
+local function nameFor(tag: string, source: string, identity: Identity?): string
+	if identity ~= nil then
+		if type(identity) ~= "table" or (identity.id ~= nil and (type(identity.id) ~= "string" or identity.id == "")) then
+			error(`[HYDROGEN] {tag} component: the third argument of Component.new is \{ id = "Name" \}`, 4)
+		end
+		if identity.id then
+			return identity.id
+		end
+	end
+	local module = string.match(source, "([^./\\]+)$")
+	if module == nil or module == tag then
+		return `{tag} component`
+	end
+	return `{module} ({tag} component)`
+end
+
+local function validate(tag: any, options: any, level: number, name: string?): Config
 	if type(tag) ~= "string" or tag == "" then
 		error(`[HYDROGEN] Component.new needs a tag: Component.new("Coin", \{ construct = ... \})`, level)
 	end
-	local name = `{tag} component`
+	local name = name or `{tag} component`
 	if type(options) ~= "table" then
 		error(`[HYDROGEN] {name}: Component.new expects an options table with construct`, level)
 	end
@@ -587,27 +621,33 @@ end
 		}
 	end)
 ]=]
-local function new(tag: string, options: any): any
+local function new(tag: string, options: any, identity: Identity?): any
+	if type(tag) ~= "string" or tag == "" then
+		validate(tag, nil, 3)
+	end
+	-- The module calling Component.new, as Hydrogen.define infers a system's id.
+	local name = nameFor(tag, debug.info(2, "s") :: string, identity)
+
 	if type(options) == "function" then
-		if type(tag) ~= "string" or tag == "" then
-			validate(tag, nil, 3)
-		end
-		return Definition.define(`{tag} component`, function(use)
+		return Definition.define(name, function(use)
 			local ok, result = pcall(options, use)
 			if not ok then
 				error(result, 0)
 			end
-			return build(validate(tag, result, 0))
+			return build(validate(tag, result, 0, name))
 		end)
 	end
 
-	local config = validate(tag, options, 3)
+	local config = validate(tag, options, 3, name)
 	return Definition.define(config.name, function()
 		return build(config)
 	end)
 end
 
-Component.new = (new :: any) :: (<I, A, T>(tag: string, options: Options<I, A, T>) -> Definition.Defined<Component<I, T>>)
-	& (<I, A, T>(tag: string, constructor: (use: Use) -> Options<I, A, T>) -> Definition.Defined<Component<I, T>>)
+-- The constructor form has no PlainOptions overload: with two overloads taking a function, Luau
+-- can't infer the constructor's `use` parameter. There, construct returns its object (or the instance).
+Component.new = (new :: any) :: (<I, A>(tag: string, options: PlainOptions<I, A>, identity: Identity?) -> Definition.Defined<Component<I, I>>)
+	& (<I, A, T>(tag: string, options: Options<I, A, T>, identity: Identity?) -> Definition.Defined<Component<I, T>>)
+	& (<I, A, T>(tag: string, constructor: (use: Use) -> Options<I, A, T>, identity: Identity?) -> Definition.Defined<Component<I, T>>)
 
 return Component

@@ -60,6 +60,15 @@ local function fire(target: Signal, character: Model)
 	end
 end
 
+-- Parents a fake character to workspace, or takes it out. Only when workspace is an Instance:
+-- create_hydrogen's test runtime makes it a stand-in table, which can't hold a real Model.
+-- Loopback players track presence through the ancestry callbacks, so nothing depends on it.
+local function place(model: Model, present: boolean)
+	if typeof(workspace) == "Instance" then
+		model.Parent = if present then workspace else nil
+	end
+end
+
 local function build(player: Player): Model
 	local model = Instance.new("Model")
 	model.Name = player.Name
@@ -72,9 +81,12 @@ local function build(player: Player): Model
 	model.PrimaryPart = root
 
 	local humanoid = Instance.new("Humanoid")
+	-- Roblox's defaults; under Lune, Health has none and reading it errors.
+	humanoid.MaxHealth = 100
+	humanoid.Health = 100
 	humanoid.Parent = model
 
-	model.Parent = workspace
+	place(model, true)
 	return model
 end
 
@@ -179,7 +191,7 @@ function Fake.stream(player: Player, present: boolean)
 	if character == nil then
 		error(`[HYDROGEN] streamCharacter: {player.Name} has no character; spawn one first`, 3)
 	end
-	character.Parent = if present then workspace else nil
+	place(character, present)
 	for _, callback in table.clone(ancestries[character] or {}) do
 		task.spawn(callback, present)
 	end

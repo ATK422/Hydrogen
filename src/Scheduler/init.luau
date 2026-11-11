@@ -13,9 +13,9 @@ local Scope = require("./Scope")
 
 export type Timer = {
 	-- False once cancelled, or once an after timer has run.
-	read active: boolean,
+	active: boolean,
 	-- True between pause() and resume().
-	read paused: boolean,
+	paused: boolean,
 	-- Stops the timer for good. Calling it again does nothing. Scope:add cleans timers with it.
 	cancel: (self: Timer) -> (),
 	-- Stops the countdown, keeping the time left. Does nothing if paused or inactive.

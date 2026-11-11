@@ -12,7 +12,7 @@ local Log = require("./Log")
 
 export type Connection = {
 	-- False once disconnected (by Disconnect, Once firing, DisconnectAll or Destroy).
-	read Connected: boolean,
+	Connected: boolean,
 	-- Stops the listener. Calling it again does nothing. Scope:add cleans connections with it.
 	Disconnect: (self: Connection) -> (),
 }

@@ -341,4 +341,5 @@ end)
 - `debug.md`: define the permission `"debug"` (`Guards.definePermission("debug", { "staff" })`) to let those players open the overlay's server data in live servers.
 - `character.md` / character hooks: range checks read `player.Character`, which the harness's `t:spawnCharacter` sets, so range guards work in tests with fake characters.
 - `clock.md`: `Clock.serverNow()` is what clients stamp actions with; in tests `t.clock:setServerOffset(seconds, player)` makes a client's stamps late or early.
+- `state.md`: a meter with `history = 1.5` answers `Mana:getAt(player, stamp)` on the server, its value at a stamp `Guards.timestamp()` accepted, so an action is judged at the moment the player acted rather than when the request arrived. Keep `history` at least the guard's window (`maxPing` + `tolerance`, 1.2 s by default).
 - `config.md`: a Config segment can be a role (`segments = { Staff = function(player) return Guards.hasRole(player, "staff") end }`); call `Config.reevaluate(player)` after `Guards.invalidate(player)`.

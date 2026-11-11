@@ -338,6 +338,24 @@ end
 
 -- Sets the Roblox globals: game (a DataModel with the usual services and a RunService stub),
 -- the datatypes, task, and a warn that Hydrogen.test can capture. Safe to call more than once.
+-- @lune/roblox's CFrame.lookAt (Lune 0.10) faces the wrong way for any target with a Z
+-- component, and returns NaN looking straight up or down. This one matches Roblox.
+local function lookAt(cframe: any, vector3: any): (any, any, any?) -> any
+	return function(at: any, target: any, up: any?): any
+		local look = target - at
+		if look.Magnitude < 1e-9 then
+			return cframe.new(at)
+		end
+		look = look.Unit
+		local right = look:Cross(up or vector3.new(0, 1, 0))
+		if right.Magnitude < 1e-6 then
+			right = vector3.new(1, 0, 0)
+		end
+		right = right.Unit
+		return cframe.fromMatrix(at, right, right:Cross(look), -look)
+	end
+end
+
 function Lune.install(options: InstallOptions?)
 	if installed then
 		return
@@ -352,6 +370,7 @@ function Lune.install(options: InstallOptions?)
 			globals[name] = roblox[name]
 		end
 	end
+	globals.CFrame = setmetatable({ lookAt = lookAt(roblox.CFrame, roblox.Vector3) }, { __index = roblox.CFrame })
 	globals.task = lune.task
 
 	-- Headless there are no frames: Heartbeat never fires. Hydrogen.test's fake clock steps time.

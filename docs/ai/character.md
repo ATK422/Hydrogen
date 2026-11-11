@@ -61,7 +61,7 @@ Nothing else to set up: the app runs the hooks as soon as one of its systems def
 | `system:characterAdded(player: Player, character: Model)` | Optional hook. Server and client. Runs in dependency order, after every `playerAdded` for `player` returned. May yield. |
 | `system:characterRemoving(player: Player, character: Model)` | Optional hook. Server and client. Runs in **reverse** dependency order, after every `characterAdded` for that character returned, before any `playerRemoving` for the player. |
 | `Hydrogen.Scope.of(system, character: Model): Scope` | The system's scope for that character. Destroyed right after the system's `characterRemoving` for it; a destroyed scope afterwards. Errors for a model the app never added. |
-| `t:spawnCharacter(player: Player, character: Model?): Model` | Harness, tests only. Like `LoadCharacter`: removes the current character first, sets `player.Character`, runs `characterAdded`. Without a model it builds one (Model named after the player, `Humanoid`, anchored `HumanoidRootPart`, parented to `workspace`). |
+| `t:spawnCharacter(player: Player, character: Model?): Model` | Harness, tests only. Like `LoadCharacter`: removes the current character first, sets `player.Character`, runs `characterAdded`. Without a model it builds one (Model named after the player, `Humanoid` with `Health` and `MaxHealth` 100, anchored `HumanoidRootPart` at the origin, parented to `workspace` when `workspace` is an Instance; `create_hydrogen`'s test runtime makes it a stand-in, and then the model stays unparented). |
 | `t:removeCharacter(player: Player)` | Harness, tests only. Runs `characterRemoving`, sets `player.Character = nil`, destroys a model `spawnCharacter` built. |
 | `t:streamCharacter(player: Player, streamedIn: boolean)` | Harness, tests only. Moves the character out of the DataModel (`false`: `characterRemoving`) or back in (`true`: `characterAdded` again), as streaming does on a client. |
 | `Hydrogen.Character.spawnFake(player, character: Model?): Model` | The same as `t:spawnCharacter`, for `Hydrogen.loopback()` without the harness. Loopback players only. |
@@ -172,6 +172,7 @@ end)
 
 - Spawn before `t:start()` (with `start = false`) to test characters that exist at boot.
 - With a `playerAdded` that waits on the fake clock, `characterAdded` runs during the `t:advance` that finishes it.
+- Under Lune, set the root's `CFrame`, not `Position`, to move a character (`(character.PrimaryPart :: BasePart).CFrame = CFrame.new(0, 0, 10)`): Lune keeps them apart and `Position` can't be read until set. Guards range checks read `CFrame`.
 - Pass your own model, `t:spawnCharacter(alice, model)`, when the system needs specific parts. The harness destroys only models it built.
 - With a bare `Hydrogen.loopback()`, use `Hydrogen.Character.spawnFake(player)`, `removeFake` and `streamFake`, and call `Hydrogen.Character._reset()` at teardown to destroy built models. Every app watching the loopback (server and client apps) gets the hooks.
 - `t:leave(player)` destroys the fake character too, as Roblox does.

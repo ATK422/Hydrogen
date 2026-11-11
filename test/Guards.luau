@@ -569,7 +569,7 @@ return function()
 					local model = Instance.new("Model")
 					local root = Instance.new("Part")
 					root.Name = "HumanoidRootPart"
-					root.Position = at
+					root.CFrame = CFrame.new(at)
 					root.Parent = model
 					return model
 				end
@@ -581,8 +581,20 @@ return function()
 				check.equal(Guards.distance(alice, bob), 20)
 
 				local part = Instance.new("Part")
-				part.Position = Vector3.new(10, 0, 5)
+				part.CFrame = CFrame.new(10, 0, 5)
 				check.equal(Guards.distance(alice, part), 5)
+
+				-- Lune's Models have no GetPivot and its Attachments no WorldPosition.
+				local model = Instance.new("Model")
+				local primary = Instance.new("Part")
+				primary.CFrame = CFrame.new(10, 0, 7)
+				primary.Parent = model
+				model.PrimaryPart = primary
+				check.equal(Guards.distance(alice, model), 7)
+				local attachment = Instance.new("Attachment")
+				attachment.CFrame = CFrame.new(0, 0, 2)
+				attachment.Parent = part
+				check.equal(Guards.distance(alice, attachment), 7)
 
 				local none, why = Guards.distance(alice, { 1, 2, 3 })
 				check.falsy(none)

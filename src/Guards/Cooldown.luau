@@ -19,10 +19,10 @@ export type CooldownOptions = {
 }
 
 export type Cooldown = {
-	read name: string?,
-	read seconds: number,
-	read maxCharges: number,
-	read gap: number,
+	name: string?,
+	seconds: number,
+	maxCharges: number,
+	gap: number,
 
 	-- Whether the player can use it now (this cooldown and its group).
 	ready: (self: Cooldown, player: Player) -> boolean,

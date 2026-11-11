@@ -4,3 +4,6 @@ lune_packages/
 luau_packages/
 roblox_packages/
 roblox_server_packages/
+
+# Downloaded by CI for the type check
+globalTypes.d.luau

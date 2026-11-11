@@ -27,7 +27,7 @@ export type Options<D, R> = {
 }
 
 export type PlayerState<S> = {
-	read name: string,
+	name: string,
 	-- The player's state. Read fields directly; assigning a field validates it (saved fields
 	-- against the store's schema), saves it with the profile and replicates it. Values are frozen:
 	-- assign a new table, or use update. On a client, holds what was replicated and is read-only.

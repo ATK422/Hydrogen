@@ -1,7 +1,7 @@
 --!strict
 
 export type Node = {
-	read id: string,
+	id: string,
 }
 
 export type Graph<T> = {

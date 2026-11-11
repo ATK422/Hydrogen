@@ -9,7 +9,7 @@ A mildly opinionated Luau framework/bootstrapper for Roblox. Hydrogen gives you:
 - **The kit**: the modules most games end up writing themselves, each free until you use it. Saving with `Data`, per-player and replicated state with `PlayerState` and `State`, purchases with `Receipts`, cleanup with `Scope`, plus `Log`, `Signal`, `Scheduler`, tagged-instance `Component`s, client `Input`, server-side `Guards`, in-game `Commands`, `Config` and feature flags, a `Debug` overlay, and cross-server `Teleport` (with Data hand-off) and `Messaging`.
 - **Tools**: `pesde x atk422/create_hydrogen` starts a new game, and `pesde x atk422/hydrogen_lint` checks its network before you playtest.
 
-Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current version: **0.5.3** (see [CHANGELOG.md](CHANGELOG.md)). License: MIT.
+Package: `atk422/hydrogen` on the [pesde](https://pesde.dev) registry. Current version: **0.5.4** (see [CHANGELOG.md](CHANGELOG.md)). License: MIT.
 
 ---
 
@@ -107,7 +107,7 @@ Hydrogen.Teleport       -- kit, server-only: teleports that save and release Dat
 Hydrogen.Messaging      -- kit, server-only: typed MessagingService topics with schema checks, size and rate limits, retries
 ```
 
-Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions`, `Hydrogen.StateSerializer`, `Hydrogen.StateMeter`, `Hydrogen.PlayerMeter`, `Hydrogen.MeterOptions`, `Hydrogen.PlayerMeterOptions` and `Hydrogen.MeterLimit`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Log: `Hydrogen.Logger`, `Hydrogen.LogLevel`, `Hydrogen.LogThreshold`, `Hydrogen.LogFields`, `Hydrogen.LogMessage`, `Hydrogen.LogLine`, `Hydrogen.LogSink`, `Hydrogen.LogBuffer` and `Hydrogen.LogRateLimitOptions`. Signal adds `Hydrogen.Signal<T...>` and `Hydrogen.Connection`; Scheduler adds `Hydrogen.Timer`, `Hydrogen.EveryOptions` and `Hydrogen.FixedOptions`. For Component: `Hydrogen.Component<I, T>` and `Hydrogen.ComponentOptions<I, A, T>`. For Input: `Hydrogen.InputAction<V>`, `Hydrogen.InputContext`, `Hydrogen.InputDevice`, `Hydrogen.InputKey`, `Hydrogen.InputBinding`, `Hydrogen.InputSavedBindings`, `Hydrogen.InputGlyph`, `Hydrogen.InputConflict` and `Hydrogen.InputSource<V>`. For Guards: `Hydrogen.Guard`, `Hydrogen.GuardOptions`, `Hydrogen.GuardRejectHook`, `Hydrogen.Cooldown`, `Hydrogen.CooldownOptions`, `Hydrogen.RoleResolver`, `Hydrogen.RoleSource`, `Hydrogen.GuardPredicate`, `Hydrogen.RangeOptions`, `Hydrogen.TimestampOptions` and `Hydrogen.GuardsConfigureOptions`. For Commands: `Hydrogen.CommandSpec`, `Hydrogen.CommandContext`, `Hydrogen.CommandArg`, `Hydrogen.CommandArgOptions`, `Hydrogen.CommandParseContext`, `Hydrogen.CommandPermission`, `Hydrogen.CommandResult`, `Hydrogen.CommandStatus`, `Hydrogen.CommandOutputKind`, `Hydrogen.CommandOutputLine`, `Hydrogen.CommandInfo`, `Hydrogen.CommandArgInfo`, `Hydrogen.CommandCompletion`, `Hydrogen.CommandSuggestion`, `Hydrogen.CommandsOptions`, `Hydrogen.CommandsClientOptions` and `Hydrogen.PermissionResolver`. For Config: `Hydrogen.Config<V, F>`, `Hydrogen.ConfigSpec<V, F>`, `Hydrogen.Flag`, `Hydrogen.FlagRule`, `Hydrogen.ConfigSegment`, `Hydrogen.ConfigEnvironment`, `Hydrogen.ConfigSource` and `Hydrogen.MemoryConfigSource`. For Debug: `Hydrogen.DebugOptions`, `Hydrogen.NetStat`, `Hydrogen.NetLatency`, `Hydrogen.DebugView`, `Hydrogen.DebugPlayerView`, `Hydrogen.DebugRow`, `Hydrogen.BootReport`, `Hydrogen.DebugWarning` and `Hydrogen.DebugInspectable`. For Teleport: `Hydrogen.TeleportResult`, `Hydrogen.TeleportFailure`, `Hydrogen.TeleportFailReason`, `Hydrogen.TeleportSendOptions`, `Hydrogen.TeleportRequest`, `Hydrogen.TeleportAccepted`, `Hydrogen.TeleportBackend`, `Hydrogen.TeleportConfig`, `Hydrogen.TeleportTicket<T>` and `Hydrogen.FakeTeleportService`. For Messaging: `Hydrogen.MessagingTopic<T>`, `Hydrogen.MessagingTopicOptions`, `Hydrogen.MessageInfo`, `Hydrogen.MessagingBackend`, `Hydrogen.MessagingMessage`, `Hydrogen.MessagingConfig` and `Hydrogen.MessagingMemoryBus`.
+Types are exported too, for annotations: `Hydrogen.App`, `Hydrogen.Defined<T>`, `Hydrogen.ClientEvent<T...>`, `Hydrogen.ServerEvent<T...>`, `Hydrogen.ClientFunction<A..., R...>`, `Hydrogen.ServerFunction<A..., R...>`, `Hydrogen.MiddlewareContext`, `Hydrogen.Middleware<T...>`, `Hydrogen.AnyMiddleware`, `Hydrogen.LoggerOptions`, `Hydrogen.RateLimitOptions`, `Hydrogen.Namespace`, `Hydrogen.Loopback`, `Hydrogen.AppOptions`, `Hydrogen.Scope`, `Hydrogen.Harness`, `Hydrogen.TestOptions`, `Hydrogen.Expectation`, `Hydrogen.Delivery`, `Hydrogen.FakeClock` and `Hydrogen.FakeClockOptions`. Data adds `Hydrogen.PlayerStore<T>`, `Hydrogen.KeyStore<T>`, `Hydrogen.DataBackend`, `Hydrogen.MemoryBackend` and `Hydrogen.UpdateOnceResult`; PlayerState adds `Hydrogen.PlayerState<S>`. For State: `Hydrogen.StateValue<T>`, `Hydrogen.StateMap<K, V>`, `Hydrogen.StateList<T>`, `Hydrogen.PlayerValue<T>`, `Hydrogen.PlayerMap<K, V>`, `Hydrogen.PlayerList<T>`, `Hydrogen.Computed<T>`, `Hydrogen.StateOptions`, `Hydrogen.PlayerStateOptions`, `Hydrogen.StateSerializer`, `Hydrogen.StateMeter`, `Hydrogen.PlayerMeter`, `Hydrogen.MeterOptions`, `Hydrogen.PlayerMeterOptions` and `Hydrogen.MeterLimit`. For Receipts: `Hydrogen.Receipt`, `Hydrogen.PurchaseDecision`, `Hydrogen.ProductHandler`, `Hydrogen.GamePassHandler`, `Hydrogen.ReceiptStore`, `Hydrogen.ReceiptsOptions`, `Hydrogen.Marketplace`, `Hydrogen.MemoryReceiptStore` and `Hydrogen.FakeMarketplace`. For Log: `Hydrogen.Logger`, `Hydrogen.LogLevel`, `Hydrogen.LogThreshold`, `Hydrogen.LogFields`, `Hydrogen.LogMessage`, `Hydrogen.LogLine`, `Hydrogen.LogSink`, `Hydrogen.LogBuffer` and `Hydrogen.LogRateLimitOptions`. Signal adds `Hydrogen.Signal<T...>` and `Hydrogen.Connection`; Scheduler adds `Hydrogen.Timer`, `Hydrogen.EveryOptions` and `Hydrogen.FixedOptions`. For Component: `Hydrogen.Component<I, T>`, `Hydrogen.ComponentOptions<I, A, T>`, `Hydrogen.ComponentPlainOptions<I, A>` and `Hydrogen.ComponentIdentity`. For Input: `Hydrogen.InputAction<V>`, `Hydrogen.InputContext`, `Hydrogen.InputDevice`, `Hydrogen.InputKey`, `Hydrogen.InputBinding`, `Hydrogen.InputSavedBindings`, `Hydrogen.InputGlyph`, `Hydrogen.InputConflict` and `Hydrogen.InputSource<V>`. For Guards: `Hydrogen.Guard`, `Hydrogen.GuardOptions`, `Hydrogen.GuardRejectHook`, `Hydrogen.Cooldown`, `Hydrogen.CooldownOptions`, `Hydrogen.RoleResolver`, `Hydrogen.RoleSource`, `Hydrogen.GuardPredicate`, `Hydrogen.RangeOptions`, `Hydrogen.TimestampOptions` and `Hydrogen.GuardsConfigureOptions`. For Commands: `Hydrogen.CommandSpec`, `Hydrogen.CommandContext`, `Hydrogen.CommandArg`, `Hydrogen.CommandArgOptions`, `Hydrogen.CommandParseContext`, `Hydrogen.CommandPermission`, `Hydrogen.CommandResult`, `Hydrogen.CommandStatus`, `Hydrogen.CommandOutputKind`, `Hydrogen.CommandOutputLine`, `Hydrogen.CommandInfo`, `Hydrogen.CommandArgInfo`, `Hydrogen.CommandCompletion`, `Hydrogen.CommandSuggestion`, `Hydrogen.CommandsOptions`, `Hydrogen.CommandsClientOptions` and `Hydrogen.PermissionResolver`. For Config: `Hydrogen.Config<V, F>`, `Hydrogen.ConfigSpec<V, F>`, `Hydrogen.Flag`, `Hydrogen.FlagRule`, `Hydrogen.ConfigSegment`, `Hydrogen.ConfigEnvironment`, `Hydrogen.ConfigSource` and `Hydrogen.MemoryConfigSource`. For Debug: `Hydrogen.DebugOptions`, `Hydrogen.NetStat`, `Hydrogen.NetLatency`, `Hydrogen.DebugView`, `Hydrogen.DebugPlayerView`, `Hydrogen.DebugRow`, `Hydrogen.BootReport`, `Hydrogen.DebugWarning` and `Hydrogen.DebugInspectable`. For Teleport: `Hydrogen.TeleportResult`, `Hydrogen.TeleportFailure`, `Hydrogen.TeleportFailReason`, `Hydrogen.TeleportSendOptions`, `Hydrogen.TeleportRequest`, `Hydrogen.TeleportAccepted`, `Hydrogen.TeleportBackend`, `Hydrogen.TeleportConfig`, `Hydrogen.TeleportTicket<T>` and `Hydrogen.FakeTeleportService`. For Messaging: `Hydrogen.MessagingTopic<T>`, `Hydrogen.MessagingTopicOptions`, `Hydrogen.MessageInfo`, `Hydrogen.MessagingBackend`, `Hydrogen.MessagingMessage`, `Hydrogen.MessagingConfig` and `Hydrogen.MessagingMemoryBus`.
 Two commands live outside the game: `pesde x atk422/create_hydrogen` starts a new game, and `pesde x atk422/hydrogen_lint` checks its network before you playtest ([Checking the network before you playtest](#checking-the-network-before-you-playtest)).
 
 The names describe **who fires it**: a `clientEvent` is fired by the client and heard by the server; a `serverEvent` is fired by the server and heard by clients.
@@ -482,6 +482,16 @@ return {
 The prefixed name is the object's name everywhere: on the wire, in `context.name` and in the logger.
 
 Every `:On` returns a disconnect function. Events can have many listeners; a function has one handler (calling `:On` again replaces it).
+
+#### Literal unions
+
+`gt.literal("M1")` and `gt.union` of literals type as `string` (the type solver widens literals when it infers a generic), so a handler would see `move: string`. To keep `"M1" | "M2"`, annotate the network object and cast the constructor; the schema still rejects other values at runtime:
+
+```luau
+export type Move = "M1" | "M2"
+local MoveSchema = gt.union(gt.literal("M1"), gt.literal("M2"))
+local Attack: Hydrogen.ClientEvent<Move> = Hydrogen.clientEvent("Attack", MoveSchema) :: any
+```
 
 #### Unreliable events
 
@@ -1031,7 +1041,7 @@ There is nothing to add to the app: defining a state registers its network event
 | `State.map(name, keySchema, valueSchema)` | key → value | everyone | `set` (nil removes), `remove`, `update`, `replace`, `clear` | `get`, `all`, `size`, `observe`, `observeKey`, `onChange` |
 | `State.list(name, itemSchema)` | array | everyone | `push`, `insert`, `remove`, `set`, `replace`, `clear` | `get`, `all`, `size`, `observe` |
 | `State.playerValue` / `playerMap` / `playerList` | the same, per player | the owner, or everyone with `visibleTo = "everyone"` | the same, player first: `Coins:set(player, 10)` | the same, player first: `Coins:get(player)`; plus `observeAll(fn(player, ...))` for every player |
-| `State.meter(name, { max = 100 })` | a number moving at a rate between min and max | everyone | `set`, `add`, `setRate`, `setRange` | `get`, `getRate`, `getRange`, `observe`, `onLimit` |
+| `State.meter(name, { max = 100 })` | a number moving at a rate between min and max | everyone | `set`, `add`, `setRate`, `setRange` | `get`, `getRate`, `getRange`, `observe`, `onLimit`; on the server, `getAt` with `history` |
 | `State.playerMeter(name, options)` | the same, per player | the owner, or everyone with `visibleTo = "everyone"` | the same, player first, plus `sync` | the same, player first, plus `observeAll`; the owner can `predictRate` / `predictAdd` with `predict = true` |
 | `State.computed(fn)` | `fn()` | each side computes its own | none | `get`, `observe` |
 
@@ -1085,12 +1095,37 @@ RunService.RenderStepped:Connect(function()
 end)
 ```
 
-- Options: `min` (default 0), `max` (required), `value` (initial, default `max`), `rate` (initial units per second, default 0), and for `playerMeter` `visibleTo`, `predict` and `predictTimeout` (seconds, default 1). The initial rate starts when the player joins, or when the server first uses the meter.
+- Options: `min` (default 0), `max` (required), `value` (initial, default `max`), `rate` (initial units per second, default 0), `history` (seconds of past values kept for `getAt`, off by default), and for `playerMeter` `visibleTo`, `predict` and `predictTimeout` (seconds, default 1). The initial rate starts when the player joins, or when the server first uses the meter.
 - **Observers fire on changes, not as time passes.** `observe(function(value, rate) end)` is for things that happen on a change; a bar that moves smoothly reads `get()` every frame.
 - **`onLimit(function(limit) end)`** is called with `"min"` or `"max"` when the value gets there, on time, from a single `Clock.delay` rescheduled on each change. A listener costs nothing until connected.
 - **Prediction** is for the owning client and opt-in (`predict = true`). `predictRate` and `predictAdd` change only that client's view, from its `Clock.serverNow()`. The next update from the server replaces the prediction, confirming or correcting it; without one it is dropped after `predictTimeout`. The server never sees it, so pair it with a `clientEvent`, and call `sync(player)` when you turn a request down so the client is corrected at once.
 - A client whose clock is behind the server's holds the value until it catches up rather than running it backwards. Under `Hydrogen.test`, `t:advance` moves meters on every side and `t.clock:setServerOffset(seconds, player)` skews one client.
 - Values are numbers checked to be finite: NaN or infinity in a write, or `min > max`, errors at your line. Writes outside the range are clamped.
+
+**Judging an action at the moment the player acted.** Say a spell casts only while mana is between 85 and 95. The client sees 94 and casts, but by the time the request arrives the server's `get()` has charged on to 97. A flat tolerance is too loose for slow meters and too tight at high ping. Instead, give the meter `history` and judge the value at the client's stamp:
+
+```luau
+-- shared
+local Mana = State.playerMeter("Mana", { max = 100, rate = 8, history = 1.5 }) -- the server keeps 1.5 s of past values
+local CastFulgur = Hydrogen.clientEvent("CastFulgur", gt.number())
+
+-- client
+CastFulgur:Fire(Hydrogen.Clock.serverNow()) -- when the player pressed
+
+-- server
+CastFulgur:Use(Hydrogen.Guards.timestamp()) -- no stamps from the future or older than ping (max 1 s) + 0.2 s
+CastFulgur:On(function(player, castAt)
+	local mana = Mana:getAt(player, castAt) -- what the player saw; nil if older than history
+	if mana and mana >= 85 and mana <= 95 then
+		Mana:add(player, -40)
+	end
+end)
+```
+
+- `getAt(player, serverTime)` (`getAt(serverTime)` on a global meter) runs on the server only, and needs `history`; without it, it errors and says what to set. It returns the value from the segment that was in force at that time, clamped to its range. A time after the last write, such as a stamp slightly ahead of the server's clock, extrapolates like `get()`. It returns `nil` for a time more than `history` seconds ago.
+- History costs nothing until you set it. With it, each server write keeps the segment it replaced and drops those that ended more than `history` seconds ago, at most 128 per meter per player. Nothing runs while time passes. A player leaving drops their meter's past.
+- Make `history` at least the oldest stamp `Guards.timestamp()` lets through: ping (capped at `maxPing`, 1 s) plus `tolerance` (0.2 s), so `history = 1.5` covers the defaults.
+- `getAt` reads the past before any later write, so a cost paid now doesn't show at an earlier stamp. When one action spends what the next one checks, refuse stamps older than the last accepted action. `docs/ai/state.md` has the full recipe.
 
 #### Why it's designed this way
 
@@ -1227,6 +1262,10 @@ end)
 - When the test ends, threads still waiting on the fake clock are never resumed. The exception is teardown itself: `playerRemoving` and `stop` hooks waiting on the fake clock are stepped until they finish (for up to 5 real seconds), so a save with a retry delay still completes.
 - `Clock.serverNow()` is for timestamps one side sends and the other compares, such as when a cast ends: `CastEnds:FireAll(Clock.serverNow() + 2)`, and each client draws the bar from `endsAt - Clock.serverNow()` with no more traffic. Never send `Clock.now()` across; it is per machine. Under the fake clock it starts at the `serverNow` option (default: the `time` option) and moves with `t:advance`. `t.clock:setServerOffset(seconds, player?)` skews it for one fake client, or every client, to test latency: the offset applies inside `t:as(player, fn)` and that client's listeners.
 - Outside the harness: `local clock = Hydrogen.Clock.fake({ now = 0 })`, then `clock:advance(seconds)`, `clock:next()` (jump to the next timer), `clock:pending()` and `clock:restore()`. Only one fake clock can be installed at a time.
+
+#### Where Lune differs from Roblox
+
+Lune's Instances aren't the engine's, and mistakes there often surface only as "error in error handling". Hydrogen's Lune runtime and the generated `test/Roblox.luau` install a correct `CFrame.lookAt` (Lune's faces the wrong way for targets with a Z component), and fake characters get Roblox's `Humanoid` defaults. The rest to write around: a `Part`'s `Position` is unreadable until set, so use `CFrame`; real Instances have no `WaitForChild`, `Model:GetPivot` or `Attachment.WorldPosition`; an Attachment's `Position` doesn't update its `CFrame`; one Instance can arrive as different userdata (equal with `==`, missing as a table key); and methods on destroyed Instances error. `docs/ai/testing.md` has the table.
 
 #### Hit detection without spatial queries
 
@@ -1616,7 +1655,7 @@ return Hydrogen.Component.new("Coin", function(use)
 end)
 ```
 
-A component is a system, so the systems folder picks it up like any other (`app:addSystemsFolders(ServerScriptService.Systems)`). Other systems `use` it and look objects up:
+A component is a system, so the systems folder picks it up like any other (`app:addSystemsFolders(ServerScriptService.Systems)`). Its id, which every `[HYDROGEN]` message about it uses, is `"Coin component"` when the module is named after the tag, and `"<Module> (<tag> component)"` otherwise, so two components on one tag can be told apart. Pass `{ id = "CoinVfx" }` as a third argument to name it yourself. Other systems `use` it and look objects up:
 
 ```luau
 Coin:get(instance)          -- the object, or nil
@@ -2381,7 +2420,7 @@ pesde install
 pesde run test
 ```
 
-Expected output ends with `Tests Ran: 543 | Passed: 543` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
+Expected output ends with `Tests Ran: 552 | Passed: 552` and `status: OK`. A few `[HYDROGEN]` warnings in the output are expected; tests exercise those paths. The command exits with code 1 on failure. GitHub Actions runs the suite on every push to `main` and every pull request (`.github/workflows/ci.yml`). The setup step installs Lune explicitly, because `pesde run` needs a `lune` executable on the PATH.
 
 ### Layout
 

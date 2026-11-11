@@ -332,6 +332,24 @@ end
 
 ---------------------------------------------------------------------------------------------
 
+-- @lune/roblox's CFrame.lookAt (Lune 0.10) faces the wrong way for any target with a Z
+-- component, and returns NaN looking straight up or down. This one matches Roblox.
+local function lookAt(cframe: any, vector3: any): (any, any, any?) -> any
+	return function(at: any, target: any, up: any?): any
+		local look = target - at
+		if look.Magnitude < 1e-9 then
+			return cframe.new(at)
+		end
+		look = look.Unit
+		local right = look:Cross(up or vector3.new(0, 1, 0))
+		if right.Magnitude < 1e-6 then
+			right = vector3.new(1, 0, 0)
+		end
+		right = right.Unit
+		return cframe.fromMatrix(at, right, right:Cross(look), -look)
+	end
+end
+
 -- Builds the DataModel from the sourcemap and sets up the Roblox globals. Call once.
 function Roblox.install(projectFile: string?)
 	dataModel = build(readSourcemap(projectFile or "default.project.json"), nil)
@@ -344,6 +362,7 @@ function Roblox.install(projectFile: string?)
 	for _, name in DATATYPES do
 		globals[name] = roblox[name]
 	end
+	globals.CFrame = setmetatable({ lookAt = lookAt(roblox.CFrame, roblox.Vector3) }, { __index = roblox.CFrame })
 	globals.Instance = roblox.Instance
 	globals.game = dataModel
 	globals.workspace = methods.GetService(dataModel, "Workspace")

@@ -20,11 +20,11 @@ local function characterPosition(player: Player): Vector3?
 	end
 	local root = character:FindFirstChild("HumanoidRootPart")
 	if root and root:IsA("BasePart") then
-		return root.Position
+		return (root :: BasePart).CFrame.Position
 	end
 	local primary = (character :: Model).PrimaryPart
 	if primary then
-		return primary.Position
+		return primary.CFrame.Position
 	end
 	return nil
 end
@@ -43,13 +43,34 @@ function Range.of(player: Player): Vector3?
 	return characterPosition(player)
 end
 
+-- Positions come from CFrame, the same value in Roblox. Under Lune, Position and CFrame are
+-- separate properties and Position can't be read until it is set, so tests set CFrame.
 local function instancePosition(value: Instance): Vector3?
 	if value:IsA("BasePart") then
-		return (value :: BasePart).Position
+		return (value :: BasePart).CFrame.Position
 	elseif value:IsA("Model") then
-		return (value :: Model):GetPivot().Position
+		local ok, pivot = pcall(function()
+			return (value :: Model):GetPivot()
+		end)
+		if ok then
+			return pivot.Position
+		end
+		-- Lune's Models have no GetPivot.
+		local primary = (value :: Model).PrimaryPart
+		return if primary then primary.CFrame.Position else nil
 	elseif value:IsA("Attachment") then
-		return (value :: Attachment).WorldPosition
+		local ok, world = pcall(function()
+			return (value :: Attachment).WorldPosition
+		end)
+		if ok then
+			return world
+		end
+		-- Lune's Attachments have no WorldPosition: their parent part's CFrame and their own.
+		local parent = value.Parent
+		if parent and parent:IsA("BasePart") then
+			return ((parent :: BasePart).CFrame * (value :: Attachment).CFrame).Position
+		end
+		return nil
 	end
 	return nil
 end
