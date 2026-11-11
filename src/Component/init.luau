@@ -37,7 +37,7 @@ export type Options<I, A, T> = {
 
 export type Component<I, T> = {
 	-- The CollectionService tag.
-	read tag: string,
+	tag: string,
 	-- The instance's object, or nil if it isn't constructed (yet).
 	get: (self: Component<I, T>, instance: Instance) -> T?,
 	-- Whether the instance's object is constructed.

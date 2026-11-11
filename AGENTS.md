@@ -56,3 +56,5 @@ Every `docs/ai/*.md` file uses this layout:
 Write for an LLM: dense, with exact names and real signatures, and no marketing. Examples must type-check in strict mode and match the code. Each file must be self-contained.
 
 `test/Docs.luau` (part of `pesde run test` and CI) compiles every ```luau block in `README.md` and `docs/ai/*.md` outside API sections, and checks that every `Hydrogen.<Name>` and `Hydrogen.<Module>.<member>` they mention exists. A fragment of table fields or a bare function expression is accepted. Put `<!-- docs-check: skip -->` on the line before a fence only for a block that is deliberately not Luau.
+
+`test/Types/` holds strict game code that CI type-checks with luau-lsp 1.70.1, the version `create_hydrogen` pins, with `src` ignored, as a game's CI ignores `roblox_packages`. When you change a public type, add the calls games make with it there. Don't use the `read` property modifier in types: that luau-lsp can't parse it, and the field disappears for games.

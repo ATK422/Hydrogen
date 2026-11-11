@@ -38,14 +38,14 @@ type function WithoutLifecycle(t: type)
 end
 
 export type Lifecycle = {
-	read id: string,
-	read init: ((any) -> ())?,
-	read start: ((any) -> ())?,
-	read playerAdded: ((any, Player) -> ())?,
-	read playerRemoving: ((any, Player) -> ())?,
-	read characterAdded: ((any, Player, Model) -> ())?,
-	read characterRemoving: ((any, Player, Model) -> ())?,
-	read stop: ((any) -> ())?,
+	id: string,
+	init: ((any) -> ())?,
+	start: ((any) -> ())?,
+	playerAdded: ((any, Player) -> ())?,
+	playerRemoving: ((any, Player) -> ())?,
+	characterAdded: ((any, Player, Model) -> ())?,
+	characterRemoving: ((any, Player, Model) -> ())?,
+	stop: ((any) -> ())?,
 }
 
 -- Extension point for modules that add a pair of hooks systems can define, such as
@@ -56,18 +56,18 @@ export type Lifecycle = {
 -- removing hook. Add the hook names to Lifecycle and WithoutLifecycle above so they type-check.
 export type Hooks = {
 	-- Used in scope names, e.g. "Combat for character alice".
-	read name: string,
+	name: string,
 	-- The method names systems define, called as system:added(...args) / system:removing(...args).
-	read added: string,
-	read removing: string,
+	added: string,
+	removing: string,
 	-- Optional. Runs once per app that has a system defining either hook: at the end of
 	-- app:start(), or when the first such system is added later. Returns cleanup for app:stop(),
 	-- which runs after every subject was removed. An error fails app:start().
-	read attach: ((feed: Feed) -> (() -> ())?)?,
+	attach: ((feed: Feed) -> (() -> ())?)?,
 	-- Optional. Runs for each player the app adds, in the thread adding them, before their
 	-- playerAdded hooks, and for players already in the app when the hooks attach late. Must not
 	-- yield. Returns cleanup that runs after the player's last playerRemoving hook.
-	read player: ((feed: Feed, player: Player) -> (() -> ())?)?,
+	player: ((feed: Feed, player: Player) -> (() -> ())?)?,
 }
 
 -- What an app hands an extension to drive its hooks. One per app and extension.

@@ -483,6 +483,16 @@ The prefixed name is the object's name everywhere: on the wire, in `context.name
 
 Every `:On` returns a disconnect function. Events can have many listeners; a function has one handler (calling `:On` again replaces it).
 
+#### Literal unions
+
+`gt.literal("M1")` and `gt.union` of literals type as `string` (the type solver widens literals when it infers a generic), so a handler would see `move: string`. To keep `"M1" | "M2"`, annotate the network object and cast the constructor; the schema still rejects other values at runtime:
+
+```luau
+export type Move = "M1" | "M2"
+local MoveSchema = gt.union(gt.literal("M1"), gt.literal("M2"))
+local Attack: Hydrogen.ClientEvent<Move> = Hydrogen.clientEvent("Attack", MoveSchema) :: any
+```
+
 #### Unreliable events
 
 For data that the next message replaces anyway, such as a per-tick frame, call `:Unreliable()` on a `serverEvent` or `clientEvent`. It returns the event, so it chains onto the definition:

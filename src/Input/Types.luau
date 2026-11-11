@@ -118,9 +118,9 @@ export type ContextOptions = {
 -- What every action has, whatever its value type. Action<V> adds the value-typed members.
 -- (Split so the types that refer to each other aren't generic, which Luau requires.)
 export type AnyAction = {
-	read name: string,
-	read kind: Kind,
-	read context: ContextControls,
+	name: string,
+	kind: Kind,
+	context: ContextControls,
 
 	-- Pressed, or a non-zero value.
 	held: (self: AnyAction) -> boolean,
@@ -165,9 +165,9 @@ export type Action<V> = AnyAction & {
 
 -- What every context has; Context adds the methods that define actions.
 export type ContextControls = {
-	read name: string,
-	read priority: number,
-	read sink: boolean,
+	name: string,
+	priority: number,
+	sink: boolean,
 
 	-- Enabled itself or by an enableFor still open, with no disableFor open.
 	enabled: (self: ContextControls) -> boolean,

@@ -2,6 +2,16 @@
 
 All notable changes to Hydrogen are listed here. Versions follow [Semantic Versioning](https://semver.org); while the version is `0.x`, a minor bump can contain breaking changes.
 
+## Unreleased
+
+### Fixed
+
+- Strict type errors in game code with the luau-lsp version `create_hydrogen` pins (1.70.1), which failed a new project's own type check:
+  - `app:start()` and `app:stop()` in the generated `Main` scripts no longer fail with "Expected this to be exactly ... but got 'App'". Every `App` method now names its `self` type, instead of each method inferring a slightly different one.
+  - Fields declared with the `read` modifier (`scope.alive`, `scope.name`, `timer.active`, `connection.Connected`, `component.tag`, `config.values`, and others) are visible again. That luau-lsp can't parse `read`, so it reported "Key not found". The modifier is gone from every public type; the fields are still read-only by contract.
+  - Literal unions: `network.md` and the README show how to keep `"M1" | "M2"` instead of `string` in handlers (annotate the network object, cast the constructor). GreenTea's generic signatures can't keep them on their own.
+- CI type-checks `test/Types/`, strict game code calling Hydrogen, with that luau-lsp version, so these can't come back.
+
 ## 0.5.3
 
 ### Fixed

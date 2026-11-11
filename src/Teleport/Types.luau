@@ -96,7 +96,7 @@ export type Config = {
 
 -- Typed teleport data with a name: send it from one server, read it on arrival in another.
 export type Ticket<T> = {
-	read name: string,
+	name: string,
 	-- Teleport.send with this ticket's value as the teleport data. Yields.
 	send: (self: Ticket<T>, players: Player | { Player }, placeId: number, value: T, options: SendOptions?) -> Result,
 	-- The value a player arrived with, checked against the schema; nil if they arrived without

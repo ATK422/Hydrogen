@@ -66,7 +66,7 @@ export type PlayerOptions<T> = {
 
 -- Methods shared by player and key stores. K is a Player or a string key.
 type Methods<K, T> = {
-	read name: string,
+	name: string,
 	-- The loaded data, deep-frozen: change it with update. Errors if the key isn't loaded.
 	get: (self: any, key: K) -> T,
 	-- Like get, but nil when the key isn't loaded.

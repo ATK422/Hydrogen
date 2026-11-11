@@ -27,3 +27,13 @@ jobs:
       - name: Test the project generator
         working-directory: tools/create-hydrogen
         run: lune run test/run
+
+      # Game code calling Hydrogen must type-check in strict mode with the luau-lsp version new games
+      # pin. Hydrogen's own source is ignored, as a game's CI ignores roblox_packages.
+      - name: Install luau-lsp
+        uses: CompeyDev/setup-rokit@v0.2.1
+
+      - name: Type-check game usage
+        run: |
+          curl -sSfL -o globalTypes.d.luau https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/1.70.1/scripts/globalTypes.d.luau
+          luau-lsp analyze --platform=roblox --sourcemap=sourcemap.json --definitions=@roblox=globalTypes.d.luau --ignore="src/**" --ignore="**/roblox_packages/**" test/Types

@@ -34,7 +34,7 @@ export type TopicOptions = {
 
 -- A named, typed MessagingService topic.
 export type Topic<T> = {
-	read name: string,
+	name: string,
 	-- Checks value against the schema and the size limit (errors at once if it fails), then
 	-- sends it, retrying failures. Yields. Returns whether MessagingService accepted it.
 	publish: (self: Topic<T>, value: T) -> (boolean, string?),

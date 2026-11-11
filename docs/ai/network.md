@@ -118,6 +118,18 @@ return {
 }
 ```
 
+**A fixed set of strings (literal union).**
+
+GreenTea's `gt.literal` and `gt.union` are generic, and Luau's type solver widens `"M1"` to `string` when it infers a generic, so handlers would see `string`. Annotate the network object with the literal type and cast the constructor; the schema still rejects anything else at runtime:
+
+```luau
+export type Move = "M1" | "M2" | "Heavy"
+local Move = gt.union(gt.literal("M1"), gt.literal("M2"), gt.literal("Heavy"))
+
+local Attack: Hydrogen.ClientEvent<Move> = Hydrogen.clientEvent("Attack", Move) :: any
+-- Attack:On(function(player, move) ... end): move is Move; Attack:Fire("M3") is a type error
+```
+
 **Namespaced definitions for a multi-place game.**
 
 ```luau
@@ -150,6 +162,8 @@ disconnect()
 ```
 
 ## Mistakes
+
+- Don't expect `gt.literal("M1")` or a `gt.union` of literals to type handler arguments as `"M1"`; the solver widens them to `string`. Do annotate the object (`local Attack: Hydrogen.ClientEvent<Move> = Hydrogen.clientEvent("Attack", MoveSchema) :: any`).
 
 - Don't define network objects inside a system or a server-only module. The client must register the same names.
 - Don't write `serverFunction("X", gt.number(), gt.number())` and expect returns. It's curried: `serverFunction("X", args...)(returns...)`.

@@ -5,3 +5,5 @@
 
 [tools]
 rojo = "rojo-rbx/rojo@7.7.0"
+# The version create_hydrogen pins in new games, so CI type-checks game code the way games do.
+luau-lsp = "JohnnyMorganz/luau-lsp@1.70.1"

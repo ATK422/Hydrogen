@@ -50,7 +50,7 @@ export type Spec<V, F> = {
 }
 
 export type Flag = {
-	read name: string,
+	name: string,
 	-- On the server, evaluates the flag for the player (once, then cached until a rule or the
 	-- player's groups change). On a client, whether the server said it is on for that player;
 	-- clients only hear about their own flags.
@@ -61,10 +61,10 @@ export type Flag = {
 }
 
 export type Config<V, F> = {
-	read name: string,
+	name: string,
 	-- Plain table lookups: GameConfig.values.RoundLength. Updated in place when a value changes.
-	read values: V,
-	read flags: F,
+	values: V,
+	flags: F,
 	-- Calls observer with the value now, then on every change. Returns a function that stops it.
 	observe: (self: Config<V, F>, name: string, observer: (value: any, previous: any) -> ()) -> () -> (),
 	-- Server: sets values or flag rules from code, above every other layer. Checked like a

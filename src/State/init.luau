@@ -42,9 +42,9 @@ export type PlayerOptions = {
 type Disconnect = () -> ()
 
 export type Value<T> = {
-	read name: string,
+	name: string,
 	-- The serverEvent that carries this state, for middleware such as Hydrogen.logger.
-	read event: Event,
+	event: Event,
 	get: (self: Value<T>) -> T,
 	set: (self: Value<T>, value: T) -> (),
 	update: (self: Value<T>, transform: (current: T) -> T) -> (),
@@ -53,8 +53,8 @@ export type Value<T> = {
 }
 
 export type Map<K, V> = {
-	read name: string,
-	read event: Event,
+	name: string,
+	event: Event,
 	get: (self: Map<K, V>, key: K) -> V?,
 	-- A copy of every entry.
 	all: (self: Map<K, V>) -> { [K]: V },
@@ -73,8 +73,8 @@ export type Map<K, V> = {
 }
 
 export type List<T> = {
-	read name: string,
-	read event: Event,
+	name: string,
+	event: Event,
 	get: (self: List<T>, index: number) -> T?,
 	all: (self: List<T>) -> { T },
 	size: (self: List<T>) -> number,
@@ -88,8 +88,8 @@ export type List<T> = {
 }
 
 export type PlayerValue<T> = {
-	read name: string,
-	read event: Event,
+	name: string,
+	event: Event,
 	get: (self: PlayerValue<T>, player: Player) -> T,
 	set: (self: PlayerValue<T>, player: Player, value: T) -> (),
 	update: (self: PlayerValue<T>, player: Player, transform: (current: T) -> T) -> (),
@@ -99,8 +99,8 @@ export type PlayerValue<T> = {
 }
 
 export type PlayerMap<K, V> = {
-	read name: string,
-	read event: Event,
+	name: string,
+	event: Event,
 	get: (self: PlayerMap<K, V>, player: Player, key: K) -> V?,
 	all: (self: PlayerMap<K, V>, player: Player) -> { [K]: V },
 	size: (self: PlayerMap<K, V>, player: Player) -> number,
@@ -116,8 +116,8 @@ export type PlayerMap<K, V> = {
 }
 
 export type PlayerList<T> = {
-	read name: string,
-	read event: Event,
+	name: string,
+	event: Event,
 	get: (self: PlayerList<T>, player: Player, index: number) -> T?,
 	all: (self: PlayerList<T>, player: Player) -> { T },
 	size: (self: PlayerList<T>, player: Player) -> number,
@@ -162,8 +162,8 @@ export type PlayerMeterOptions = {
 }
 
 export type Meter = {
-	read name: string,
-	read event: Event,
+	name: string,
+	event: Event,
 	-- The value now, worked out from the last change, the rate and Clock.serverNow(), within
 	-- [min, max]. Costs a little arithmetic; call it every frame for UI.
 	get: (self: Meter) -> number,
@@ -185,8 +185,8 @@ export type Meter = {
 }
 
 export type PlayerMeter = {
-	read name: string,
-	read event: Event,
+	name: string,
+	event: Event,
 	get: (self: PlayerMeter, player: Player) -> number,
 	getRate: (self: PlayerMeter, player: Player) -> number,
 	getRange: (self: PlayerMeter, player: Player) -> (number, number),

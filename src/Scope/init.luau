@@ -8,9 +8,9 @@ local Log = require("./Log")
 export type Scope = {
 	-- False once destroyed. Anything added to a destroyed scope is cleaned right away, so work
 	-- that finishes after its player left (a DataStore load, a delay) can't leak.
-	read alive: boolean,
+	alive: boolean,
 	-- Shown in cleanup warnings.
-	read name: string?,
+	name: string?,
 
 	-- Tracks a task and returns it: a function (called), a thread (cancelled), an RBXScriptConnection,
 	-- an Instance, another scope, or an object with Destroy, Disconnect or cancel (a promise).
